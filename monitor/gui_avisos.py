@@ -31,7 +31,8 @@ class GestorAvisos(tk.Toplevel):
     def __init__(self, master, al_guardar=None):
         super().__init__(master)
         self.title("📢 Avisos para los espacios libres")
-        self.geometry("1040x660")
+        from .editor import ajustar_ventana
+        ajustar_ventana(self, 1040, 680)
         self.minsize(900, 560)
         self.transient(master)
         self.al_guardar = al_guardar
@@ -51,6 +52,14 @@ class GestorAvisos(tk.Toplevel):
         self.num_todos.pack(side="left", padx=4)
         ttk.Button(f, text="Aplicar a todos", command=self._numero_todos).pack(side="left")
 
+        pie = ttk.Frame(self, padding=12)
+        pie.pack(side="bottom", fill="x")
+        ttk.Button(pie, text="💾 Guardar y ver en el periódico  (Ctrl+S)", style="Accent.TButton",
+                   command=self._guardar).pack(side="right")
+        ttk.Button(pie, text="Cerrar  (Esc)", command=self.destroy).pack(side="right", padx=6)
+        self.bind("<Control-s>", lambda e: self._guardar())
+        self.bind("<Control-S>", lambda e: self._guardar())
+        self.bind("<Escape>", lambda e: self.destroy())
         cuerpo = ttk.Frame(self, padding=(12, 0))
         cuerpo.pack(fill="both", expand=True)
         izq = ttk.Frame(cuerpo)
@@ -98,11 +107,6 @@ class GestorAvisos(tk.Toplevel):
         self.prev = tk.Label(self.form, bg="#E9EDF4")
         self.prev.grid(row=r + 5, column=0, columnspan=2, sticky="w")
 
-        pie = ttk.Frame(self, padding=12)
-        pie.pack(fill="x")
-        ttk.Button(pie, text="Guardar y ver en el periódico", style="Accent.TButton",
-                   command=self._guardar).pack(side="right")
-        ttk.Button(pie, text="Cerrar", command=self.destroy).pack(side="right", padx=6)
         self._job = None
         self._refrescar_lista(0)
         self.grab_set()

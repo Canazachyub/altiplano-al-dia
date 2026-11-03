@@ -104,7 +104,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Altiplano al Día — Monitor de noticias")
-        self.geometry("1360x820")
+        from .editor import ajustar_ventana
+        ajustar_ventana(self, 1360, 820)
         self.minsize(1100, 680)
         self.configure(bg=BG)
         storage.init_db()
@@ -1270,7 +1271,8 @@ class App(tk.Tk):
             return
         w = tk.Toplevel(self)
         w.title("Periódicos publicados")
-        w.geometry("720x420")
+        from .editor import ajustar_ventana
+        ajustar_ventana(w, 720, 420)
         w.transient(self)
         tr = ttk.Treeview(w, columns=("n", "fecha", "notas", "archivo"), show="headings", selectmode="browse")
         for c, t, a in (("n", "N°", 60), ("fecha", "Fecha", 140), ("notas", "Noticias", 80), ("archivo", "Archivo", 400)):

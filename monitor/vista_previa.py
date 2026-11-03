@@ -555,7 +555,8 @@ class ElegirNoticia(tk.Toplevel):
         super().__init__(vista)
         self.vista, self.pag = vista, pag
         self.title(f"Añadir una noticia en la página {pag}")
-        self.geometry("900x560")
+        from .editor import ajustar_ventana
+        ajustar_ventana(self, 900, 560)
         self.transient(vista)
         top = ttk.Frame(self, padding=10)
         top.pack(fill="x")

@@ -26,13 +26,25 @@ class EditorNota(tk.Toplevel):
         self.nota = json.loads(g["nota_json"])
         self.posts = storage.posts_de_grupo(gid)
         self.title(f"Editar nota · grupo #{gid}")
-        self.geometry("1180x780")
-        self.minsize(980, 640)
+        ajustar_ventana(self, 1180, 800)
+        self.minsize(820, 520)
         self.configure(bg="#F3F5F9")
         self.transient(master)
         self._imgs = []          # referencias para que Tk no borre las miniaturas
         self.foto = None if self.nota.get("_SIN_FOTO") else self._foto_actual()
 
+        # barra de botones primero, abajo: siempre visible aunque la pantalla sea chica
+        pie = ttk.Frame(self, padding=(12, 6, 12, 10))
+        pie.pack(side="bottom", fill="x")
+        ttk.Button(pie, text="💾 Guardar  (Ctrl+S)", style="Accent.TButton", command=self._guardar).pack(side="right")
+        ttk.Button(pie, text="Cancelar  (Esc)", command=self.destroy).pack(side="right", padx=6)
+        ttk.Label(pie, text="Los cambios se ven en el periódico al guardar.", foreground=MUTED).pack(side="left")
+        cab = ttk.Frame(self, padding=(12, 8, 12, 0))
+        cab.pack(side="top", fill="x")
+        ttk.Button(cab, text="💾 Guardar", style="Accent.TButton", command=self._guardar).pack(side="right")
+        self.bind("<Control-s>", lambda e: self._guardar())
+        self.bind("<Control-S>", lambda e: self._guardar())
+        self.bind("<Escape>", lambda e: self.destroy())
         cuerpo = ttk.Frame(self, padding=12)
         cuerpo.pack(fill="both", expand=True)
         cuerpo.columnconfigure(0, weight=3)
@@ -65,7 +77,7 @@ class EditorNota(tk.Toplevel):
         marco = ttk.Frame(izq)
         marco.grid(row=fila, column=1, sticky="nsew", pady=3)
         izq.rowconfigure(fila, weight=1)
-        self.cuerpo = self._texto(marco, 14, self.nota.get("CUERPO"))
+        self.cuerpo = self._texto(marco, 9, self.nota.get("CUERPO"))
         sb = ttk.Scrollbar(marco, command=self.cuerpo.yview)
         self.cuerpo.configure(yscrollcommand=sb.set)
         self.cuerpo.pack(side="left", fill="both", expand=True)
@@ -118,11 +130,6 @@ class EditorNota(tk.Toplevel):
         ttk.Checkbutton(der, text="Incluir esta noticia en el periódico", variable=self.incluir).pack(
             anchor="w", pady=(16, 0))
 
-        # ---------------- botones
-        pie = ttk.Frame(self, padding=(12, 0, 12, 12))
-        pie.pack(fill="x")
-        ttk.Button(pie, text="Guardar", style="Accent.TButton", command=self._guardar).pack(side="right")
-        ttk.Button(pie, text="Cancelar", command=self.destroy).pack(side="right", padx=6)
         self._mostrar_foto()
         self.grab_set()
 
@@ -248,9 +255,16 @@ class EditorDatos(tk.Toplevel):
     def __init__(self, master, gids, on_save=None):
         super().__init__(master)
         self.title("Editar datos clave")
-        self.geometry("760x600")
+        ajustar_ventana(self, 780, 640)
         self.transient(master)
         self.on_save = on_save
+        pie = ttk.Frame(self, padding=12)
+        pie.pack(side="bottom", fill="x")
+        ttk.Button(pie, text="💾 Guardar  (Ctrl+S)", style="Accent.TButton", command=self._guardar).pack(side="right")
+        ttk.Button(pie, text="Cancelar  (Esc)", command=self.destroy).pack(side="right", padx=6)
+        self.bind("<Control-s>", lambda e: self._guardar())
+        self.bind("<Control-S>", lambda e: self._guardar())
+        self.bind("<Escape>", lambda e: self.destroy())
         ttk.Label(self, text="Un dato por línea. Si borras todos los datos de las noticias, la caja no se muestra.",
                   foreground=MUTED, padding=(12, 10, 12, 4)).pack(anchor="w")
         cuerpo = ttk.Frame(self, padding=(12, 0))
@@ -264,10 +278,6 @@ class EditorDatos(tk.Toplevel):
             t.insert("1.0", datos_a_texto(nota))
             t.pack(fill="both", expand=True)
             self.campos[gid] = (t, nota)
-        pie = ttk.Frame(self, padding=12)
-        pie.pack(fill="x")
-        ttk.Button(pie, text="Guardar", style="Accent.TButton", command=self._guardar).pack(side="right")
-        ttk.Button(pie, text="Cancelar", command=self.destroy).pack(side="right", padx=6)
         self.grab_set()
 
     def _guardar(self):
@@ -277,3 +287,11 @@ class EditorDatos(tk.Toplevel):
         if self.on_save:
             self.on_save()
         self.destroy()
+
+
+def ajustar_ventana(win, ancho, alto):
+    """Tamaño que entra en la pantalla (deja sitio a la barra de tareas) y centrado."""
+    win.update_idletasks()
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    w, h = min(ancho, sw - 40), min(alto, sh - 90)
+    win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2 - 20)}")
