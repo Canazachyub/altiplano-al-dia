@@ -33,7 +33,7 @@ Si tu instalación es anterior a que existiera `ACTUALIZAR.bat`, bájalo una vez
 en la carpeta del programa y pegando:
 
 ```
-iwr https://raw.githubusercontent.com/Canazachyub/altiplano-al-dia/main/ACTUALIZAR.bat -OutFile ACTUALIZAR.bat; .\ACTUALIZAR.bat
+(iwr https://raw.githubusercontent.com/Canazachyub/altiplano-al-dia/main/ACTUALIZAR.bat -UseBasicParsing).Content -replace "`r?`n","`r`n" | Set-Content ACTUALIZAR.bat -Encoding ascii -NoNewline; .\ACTUALIZAR.bat
 ```
 
 ## Primer inicio
