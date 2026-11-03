@@ -11,6 +11,7 @@ from . import storage
 from .ai import redactar
 from .config import LOG_PATH, get_api_key, page_slug
 from .pdfgen import generar_pdf
+from .imagenes import descargar_imagen, og_image
 from .scraper import NotLoggedIn, open_context, scrape_page
 
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +93,10 @@ def revisar(cfg: dict, emit) -> None:
                                 estado = "base"
                             ya_procesados += 1
                         storage.insert_post(p, estado)
+                        if estado == "pendiente":
+                            ruta = descargar_imagen(p.get("imagen_url") or og_image(p.get("enlace_ext")), p["id"])
+                            if ruta:
+                                storage.update_post(p["id"], imagen=ruta)
                         if estado == "pendiente":
                             nuevos += 1
                             emit("nuevo", p["id"])

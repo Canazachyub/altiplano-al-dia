@@ -1,32 +1,28 @@
 {
   "paginas": [
     {
-      "url": "https://www.facebook.com/unapunooficial",
+      "url": "https://www.facebook.com/radiopachamama",
       "activa": true
     },
     {
-      "url": "https://www.facebook.com/radiopachamama",
-      "activa": false
-    },
-    {
       "url": "https://www.facebook.com/diariolosandespuno",
-      "activa": false
+      "activa": true
     },
     {
       "url": "https://www.facebook.com/diariosinfronteras",
-      "activa": false
+      "activa": true
     },
     {
       "url": "https://www.facebook.com/OndaAzulPuno",
-      "activa": false
+      "activa": true
     },
     {
       "url": "https://www.facebook.com/larepublicape",
-      "activa": false
+      "activa": true
     },
     {
       "url": "https://www.facebook.com/famatv27",
-      "activa": false
+      "activa": true
     }
   ],
   "intervalo_min": 5,
@@ -40,9 +36,25 @@
   "fase2_auto": true,
   "pdf_consolidado_auto": true,
   "ventana_cruce_horas": 48,
-  "ambitos": ["DISTRITAL", "LOCAL", "REGIONAL", "NACIONAL", "INTERNACIONAL"],
-  "temas": ["Política", "Deportes", "Economía", "Educación", "Salud", "Seguridad/Policiales",
-            "Sociedad", "Cultura", "Medio ambiente", "Otros"],
+  "ambitos": [
+    "DISTRITAL",
+    "LOCAL",
+    "REGIONAL",
+    "NACIONAL",
+    "INTERNACIONAL"
+  ],
+  "temas": [
+    "Política",
+    "Deportes",
+    "Economía",
+    "Educación",
+    "Salud",
+    "Seguridad/Policiales",
+    "Sociedad",
+    "Cultura",
+    "Medio ambiente",
+    "Otros"
+  ],
   "nombres_medios": {
     "unapunooficial": "UNA Puno",
     "radiopachamama": "Radio Pachamama",

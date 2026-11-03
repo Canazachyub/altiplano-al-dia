@@ -17,6 +17,8 @@ LOG_PATH = BASE_DIR / "data" / "monitor.log"
 API_LOG_PATH = BASE_DIR / "data" / "api.log"
 EXCEL_PATH = BASE_DIR / "noticias.xlsx"
 CONSOLIDADOS_DIR = PDF_DIR / "consolidados"
+IMG_DIR = BASE_DIR / "data" / "img"
+ASSETS_DIR = BASE_DIR / "assets"
 
 DEFAULTS = {
     "paginas": [],

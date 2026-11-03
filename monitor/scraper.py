@@ -71,7 +71,15 @@ EXTRACT_JS = r"""
       .filter(e => !msg || (msg.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_PRECEDING))
       .map(e => e.getAttribute('aria-label'))
       .filter(t => /\d{1,2} de [a-záéíóú]+ de \d{4}/i.test(t || ''));
+  // foto principal: la imagen de fbcdn más grande del post (no avatares ni emojis)
+  let img = null, area = 0;
+  for (const im of p.querySelectorAll('img')) {
+    const r = im.getBoundingClientRect();
+    const a = r.width * r.height;
+    if (/fbcdn|scontent/.test(im.src) && r.width >= 180 && r.height >= 120 && a > area) { img = im.src; area = a; }
+  }
   return {
+    img,
     texto: msg ? msg.innerText : '',
     ext, perma, fechas,
     titulo_card: (q('title') || {}).innerText || '',
@@ -271,6 +279,7 @@ def scrape_page(page, url, max_posts=8, is_known=None, log=print, max_scrolls=15
                 "pagina": slug,
                 "permalink": permalink,
                 "enlace_ext": data["ext"],
+                "imagen_url": data.get("img"),
                 "texto": texto,
                 "publicado": parse_fecha(ts.get("tooltip") or "")
                 or next((f for f in (parse_fecha(x) for x in data["fechas"]) if f), None)

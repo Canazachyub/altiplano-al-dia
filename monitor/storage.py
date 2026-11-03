@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS consolidados (
 
 # columnas añadidas a posts en la Fase 2 (migración sobre bases de la Fase 1)
 POSTS_EXTRA = {"ambito": "TEXT", "tema": "TEXT", "grupo_id": "INTEGER", "resumen": "TEXT",
-               "consolidado_n": "INTEGER"}
+               "consolidado_n": "INTEGER", "imagen": "TEXT"}
 
 
 def _conn():

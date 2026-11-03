@@ -75,10 +75,25 @@ Al final de cada revisión (si está activado en *Configuración*):
    una versión. Los grupos de una sola fuente reutilizan la nota de la Fase 1, sin gastar API.
 3. **Excel** `noticias.xlsx`, con las hojas *Noticias* y *Grupos*. Se regenera desde SQLite
    (la fuente principal). Si está abierto en Excel, se guarda una copia con fecha.
-4. **Boletín PDF consolidado** en `pdfs/consolidados/AAAA-MM-DD_HHMM.pdf`: portada, índice por
-   ámbito y tema con número de página (con enlace) y el desarrollo de cada noticia. Solo incluye
-   lo que no salió antes. Si una noticia ya publicada recibe una fuente nueva, vuelve a salir
-   marcada como **ACTUALIZACIÓN**.
+4. **Boletín PDF consolidado** en `pdfs/consolidados/AAAA-MM-DD_HHMM.pdf`, maquetado como diario
+   impreso (`monitor/consolidado.py`):
+   - portada con barra lateral: logo, fecha, sección en vertical sobre la ilustración del
+     altiplano e índice **"En esta edición"** con número de página y enlace a cada nota;
+   - páginas interiores con banda de cabecera (logo, sección con su icono, fecha y número de
+     página) y grilla de 4 columnas: notas grandes en 3 columnas con antetítulo, titular (la
+     primera línea en azul en la nota principal), firma "Redacción Altiplano al Día", foto con
+     pie y texto justificado con guiones; notas cortas en la columna lateral;
+   - caja **Datos clave** cuando sobra espacio;
+   - al final, una **ficha de verificación** interna (medios, enlaces y discrepancias) que no es
+     parte de lo publicable.
+
+   Solo incluye lo que no salió antes. Si una noticia ya publicada recibe una fuente nueva,
+   vuelve a salir marcada como **ACTUALIZACIÓN**. Las fotos se guardan al revisar cada página
+   (`data/img/`); si el post no tiene foto se usa la imagen destacada de la nota enlazada.
+
+   Recursos gráficos en `assets/`: el logo, los iconos de ámbitos y temas y la ilustración de
+   portada (generados con ChatGPT) y las fuentes Zilla Slab, PT Serif y PT Sans Narrow
+   (licencia OFL, incluidas en `assets/fonts/`).
 
 Cada llamada a Claude (tokens de entrada y salida, duración, errores) queda en `data/api.log`.
 

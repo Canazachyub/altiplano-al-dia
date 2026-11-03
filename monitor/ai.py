@@ -39,6 +39,16 @@ ESTILO:
 - Párrafos de 2 a 4 oraciones. Fechas y horas concretas en lugar de "ayer" u "hoy" cuando se conozcan.
 - Tono informativo y sobrio: no opines, no adjetives de más.
 
+FORMATO DE DIARIO:
+- ANTETITULO: frase corta (máx. 10 palabras) que va encima del titular y aporta contexto o
+  un segundo dato (p. ej. "GESTIÓN DEL HOSPITAL PARA LA ATENCIÓN DE URGENCIAS"). No repite el titular.
+- LUGAR: ciudad o distrito donde ocurre el hecho, una o dos palabras ("Juliaca", "Puno",
+  "Ilave"). Vacío si la fuente no lo dice.
+- PIE_FOTO: frase de 5 a 12 palabras que sirva como pie de la foto principal. Resume el hecho
+  sin describir detalles visuales que no conoces (no has visto la foto).
+- Si el CUERPO tiene 5 o más párrafos, puedes incluir 1 o 2 intertítulos de 1 a 3 palabras,
+  cada uno en un párrafo propio que empiece con "## " (p. ej. "## LAS CIFRAS").
+
 RIGOR:
 - NO inventes datos, nombres, cifras, fechas ni citas que no estén en la fuente.
 - Si la fuente es escueta, la nota es breve: es mejor corta y exacta que larga y con supuestos."""
@@ -50,8 +60,11 @@ Si la publicación no es una noticia (saludo, condolencia, aviso), redáctala ig
 
 Responde SOLO con un objeto JSON válido, sin texto adicional, con estas claves:
 {
+  "ANTETITULO": "…",
   "TITULAR": "…",
   "BAJADA": "…",
+  "LUGAR": "…",
+  "PIE_FOTO": "…",
   "CUERPO": "párrafos separados por \\n\\n",
   "DATOS": ["dato o cifra importante", "..."]
 }"""
@@ -106,7 +119,7 @@ def _parse_json(content: str) -> dict:
     data.setdefault("DATOS", [])
     if isinstance(data["DATOS"], str):
         data["DATOS"] = [data["DATOS"]]
-    for k in ("TITULAR", "BAJADA", "CUERPO"):
+    for k in ("TITULAR", "BAJADA", "CUERPO", "ANTETITULO", "LUGAR", "PIE_FOTO"):
         data[k] = str(data.get(k, "")).strip()
     return data
 

@@ -35,6 +35,12 @@ AMBITO_COLOR = {"TODOS": "#334155", "DISTRITAL": "#2E7D32", "LOCAL": "#00838F", 
 F = "Segoe UI"
 
 
+def _sin_marcas(cuerpo) -> str:
+    """Intertítulos '## X' -> 'X' en mayúsculas, para el visor de texto."""
+    import re as _re
+    return _re.sub(r"(?m)^## (.+)$", lambda m: m.group(1).upper(), cuerpo or "")
+
+
 def _fecha_corta(iso):
     if not iso:
         return "—"
@@ -708,7 +714,7 @@ class App(tk.Tk):
             t.add(ia.get("TITULAR", "") + "\n", "h1")
             t.add(ia.get("BAJADA", "") + "\n", "baj")
             t.add("CUERPO\n", "h2")
-            t.add((ia.get("CUERPO") or "") + "\n")
+            t.add(_sin_marcas(ia.get("CUERPO")) + "\n")
             if ia.get("DATOS"):
                 t.add("DATOS O CIFRAS\n", "h2")
                 for d in ia["DATOS"]:
@@ -852,7 +858,7 @@ class App(tk.Tk):
         t.add((nota.get("TITULAR") or "") + "\n", "h1")
         t.add((nota.get("BAJADA") or "") + "\n", "baj")
         t.add("CUERPO\n", "h2")
-        t.add((nota.get("CUERPO") or "") + "\n")
+        t.add(_sin_marcas(nota.get("CUERPO")) + "\n")
         if nota.get("DATOS"):
             t.add("DATOS O CIFRAS IMPORTANTES\n", "h2")
             for d in nota["DATOS"]:

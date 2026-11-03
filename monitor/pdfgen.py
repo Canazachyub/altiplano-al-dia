@@ -76,8 +76,11 @@ def generar_pdf(post: dict, ia: dict) -> Path:
 
     s.append(Paragraph("CUERPO", st["h"]))
     for par in re.split(r"\n\s*\n", ia.get("CUERPO") or ""):
-        if par.strip():
-            s.append(Paragraph(_limpio(par.strip()), st["body"]))
+        par = par.strip()
+        if par.startswith("## "):
+            s.append(Paragraph(f"<b>{_limpio(par[3:]).upper()}</b>", st["body"]))
+        elif par:
+            s.append(Paragraph(_limpio(par), st["body"]))
 
     datos = [d for d in ia.get("DATOS") or [] if str(d).strip()]
     s.append(Paragraph("DATOS O CIFRAS IMPORTANTES", st["h"]))

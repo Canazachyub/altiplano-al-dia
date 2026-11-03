@@ -175,8 +175,11 @@ y declaraciones de todas ellas.
 
 Responde SOLO JSON:
 {
+ "ANTETITULO": "…",
  "TITULAR": "…",
  "BAJADA": "…",
+ "LUGAR": "…",
+ "PIE_FOTO": "…",
  "CUERPO": "párrafos separados por \\n\\n",
  "DATOS": [{"dato": "…", "fuentes": ["medio", "…"]}],
  "DISCREPANCIAS": [{"aspecto": "…", "versiones": [{"medio": "…", "dice": "…"}]}],
@@ -194,6 +197,7 @@ def _nota_desde_fase1(post, cfg) -> dict | None:
     medio = nombre_medio(post["pagina"], cfg)
     return {
         "TITULAR": ia.get("TITULAR", ""), "BAJADA": ia.get("BAJADA", ""), "CUERPO": ia.get("CUERPO", ""),
+        "ANTETITULO": ia.get("ANTETITULO", ""), "LUGAR": ia.get("LUGAR", ""), "PIE_FOTO": ia.get("PIE_FOTO", ""),
         "DATOS": [{"dato": d, "fuentes": [medio]} for d in ia.get("DATOS", [])],
         "DISCREPANCIAS": [], "FUENTES": [{"medio": medio, "aporte": "fuente única"}],
         "_origen": f"fase1:{ia.get('_proveedor', '')}",
