@@ -75,9 +75,15 @@ Al final de cada revisión (si está activado en *Configuración*):
    una versión. Los grupos de una sola fuente reutilizan la nota de la Fase 1, sin gastar API.
 3. **Excel** `noticias.xlsx`, con las hojas *Noticias* y *Grupos*. Se regenera desde SQLite
    (la fuente principal). Si está abierto en Excel, se guarda una copia con fecha.
-4. **Boletín PDF consolidado** en `pdfs/consolidados/AAAA-MM-DD_HHMM.pdf`, maquetado como diario
-   impreso (`monitor/consolidado.py`):
-   - portada con barra lateral: logo, fecha, sección en vertical sobre la ilustración del
+4. **Periódico PDF** en `pdfs/consolidados/AAAA-MM-DD_HHMM.pdf`, maquetado como diario impreso
+   (`monitor/portada.py` y `monitor/consolidado.py`). Ya no se genera solo: primero lo revisas en
+   el Dashboard (ver "Antes de maquetar") y lo generas con **📰 Generar periódico**.
+   - **portada** de diario: cabezal con el logo, nota destacada arriba a la derecha, franja de
+     fecha, banda "Hoy en Puno" con el conteo por ámbito, nota principal con titular gigante,
+     foto y puntos clave, nota lateral y tres notas abajo, cada una con su etiqueta "‹‹ PÁG. N".
+     Los titulares de portada los escribe Claude (una llamada por periódico) y quedan guardados
+     en la nota para que puedas corregirlos;
+   - página 2 con barra lateral: logo, fecha, sección en vertical sobre la ilustración del
      altiplano e índice **"En esta edición"** con número de página y enlace a cada nota;
    - páginas interiores con banda de cabecera (logo, sección con su icono, fecha y número de
      página) y grilla de 4 columnas: notas grandes en 3 columnas con antetítulo, titular (la
@@ -96,6 +102,18 @@ Al final de cada revisión (si está activado en *Configuración*):
    (licencia OFL, incluidas en `assets/fonts/`).
 
 Cada llamada a Claude (tokens de entrada y salida, duración, errores) queda en `data/api.log`.
+
+### Antes de maquetar (Dashboard)
+
+- **Qué noticias van**: la columna **Va** muestra ☑ (va) o ☐ (no va) en las noticias pendientes;
+  un clic la cambia. *Incluir todas* / *Excluir todas* actúan sobre lo que se ve con los filtros.
+  Las excluidas no se pierden: quedan pendientes por si luego las quieres incluir.
+- **Editar una nota** (doble clic o *✎ Editar nota*): antetítulo, titular, lugar, pie de foto,
+  bajada, cuerpo (párrafos separados por una línea en blanco; `## TEXTO` es un intertítulo),
+  textos de portada y la **foto**: una de los posts de la noticia, una de tu PC
+  (*Elegir archivo…*) o *Sin foto*. La plantilla no cambia, solo el contenido.
+- **👁 Vista previa** arma el periódico en `data/vista_previa.pdf` sin publicar nada.
+- **📰 Generar periódico** lo genera de verdad y marca esas noticias como publicadas.
 
 **Dashboard**: tarjetas por ámbito con contadores (clic para filtrar), chips por tema, periodo
 (hoy / 48 h / 7 días / todo), filtro de combinadas (◆ = 2 o más medios). Al seleccionar una

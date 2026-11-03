@@ -74,6 +74,9 @@ def init_db():
             if col not in cols:
                 c.execute(f"ALTER TABLE posts ADD COLUMN {col} {typ}")
         c.execute("CREATE INDEX IF NOT EXISTS ix_grupo ON posts(grupo_id)")
+        gcols = {r["name"] for r in c.execute("PRAGMA table_info(grupos)")}
+        if "en_periodico" not in gcols:   # 1 = va al periódico, 0 = la excluyó el editor
+            c.execute("ALTER TABLE grupos ADD COLUMN en_periodico INTEGER DEFAULT 1")
 
 
 def now_iso():
@@ -233,6 +236,7 @@ def grupos_para_pdf():
     with _conn() as c:
         return c.execute(
             "SELECT * FROM grupos WHERE estado_pdf IN ('nuevo','actualizacion') AND nota_json IS NOT NULL"
+            " AND COALESCE(en_periodico, 1)=1"
         ).fetchall()
 
 
@@ -256,3 +260,13 @@ def siguiente_consolidado() -> int:
 def ultimo_consolidado():
     with _conn() as c:
         return c.execute("SELECT * FROM consolidados ORDER BY n DESC LIMIT 1").fetchone()
+
+
+def set_en_periodico(gids, valor: bool) -> None:
+    with _conn() as c:
+        c.executemany("UPDATE grupos SET en_periodico=? WHERE id=?", [(1 if valor else 0, g) for g in gids])
+
+
+def guardar_nota(gid, nota: dict) -> None:
+    """Guarda la nota editada a mano (texto, foto, portada)."""
+    actualizar_grupo(gid, nota_json=nota, titular=nota.get("TITULAR") or None, actualizado=now_iso())

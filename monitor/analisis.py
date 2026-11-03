@@ -239,6 +239,11 @@ def generar_notas(cfg: dict, emit=lambda *a: None) -> int:
                 continue
         ambito = nota.get("ambito") if nota.get("ambito") in cfg["ambitos"] else g["ambito"]
         tema = nota.get("tema") if nota.get("tema") in cfg["temas"] else g["tema"]
+        if g["nota_json"]:
+            previa = json.loads(g["nota_json"])
+            for k in ("_IMAGEN", "_SIN_FOTO"):
+                if previa.get(k):
+                    nota[k] = previa[k]
         nota["LINKS"] = [{"medio": nombre_medio(p["pagina"], cfg), "fecha": p["publicado"] or p["detectado"],
                           "facebook": p["permalink"], "externo": p["enlace_ext"]} for p in posts]
         fechas = [p["publicado"] or p["detectado"] for p in posts]

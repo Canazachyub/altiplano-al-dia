@@ -138,8 +138,9 @@ def _articulo(g, cfg) -> dict:
     nota = json.loads(g["nota_json"])
     posts = storage.posts_de_grupo(g["id"])
     img = None
-    for p in posts:
-        ruta = p["imagen"] if "imagen" in p.keys() else None
+    candidatas = [] if nota.get("_SIN_FOTO") else (
+        [nota.get("_IMAGEN")] + [p["imagen"] if "imagen" in p.keys() else None for p in posts])
+    for ruta in candidatas:   # _IMAGEN = foto elegida a mano en el editor
         if ruta:
             try:
                 with Image.open(ruta) as im:
@@ -451,7 +452,7 @@ def _paginar(arts, st):
     paginas = []
     cola = list(arts)
     while cola:
-        pg = _Pagina(len(paginas) + 1, portada=not paginas)
+        pg = _Pagina(len(paginas) + 2, portada=not paginas)   # la 1 es la portada
         paginas.append(pg)
         # nota principal de la página
         a = cola.pop(0)
@@ -652,7 +653,7 @@ def _portada_lateral(c, pg, arts, paginas_de, numero, ahora, st, anclas_links):
     c.rect(x, y - panel_h, 26, 24, stroke=0, fill=1)
     c.setFillColor(AZUL)
     c.setFont("Slab", 15)
-    c.drawCentredString(x + 13, y - panel_h + 7, "1")
+    c.drawCentredString(x + 13, y - panel_h + 7, str(pg.n))
     y -= panel_h + 12
 
     # "En esta edición"
@@ -727,7 +728,7 @@ def _ordenar(arts, cfg):
     return sorted(arts, key=lambda a: (amb.get(a["ambito"], 99), peso(a)))
 
 
-def _render(destino, arts, paginas, numero, ahora, st):
+def _render(destino, arts, paginas, numero, ahora, st, cfg):
     paginas_de = {}
     for pg in paginas:
         for a, _, _ in pg.main + pg.lat + ([pg.full] if pg.full else []):
@@ -738,9 +739,12 @@ def _render(destino, arts, paginas, numero, ahora, st):
     fecha_txt = _fecha_larga(ahora)
     anclas, links = set(), []
     orden_indice = sorted(arts, key=lambda a: (paginas_de.get(a["gid"], 999)))
+    from . import portada
+    portada.dibujar(c, cfg, arts, paginas_de, numero, ahora, {
+        "AZUL": AZUL, "AZUL_CLARO": AZUL_CLARO, "AMARILLO": AMARILLO, "NEGRO": NEGRO, "W": W, "H": H,
+        "recorte": _recorte, "icono": _icono, "logo": _logo, "fecha_larga": _fecha_larga, "plano": _plano})
     for pg in paginas:
-        if pg.n > 1:
-            c.showPage()
+        c.showPage()
         if pg.portada:
             _portada_lateral(c, pg, orden_indice, paginas_de, numero, ahora, st, links)
             _filete_v(c, pg.x_main - GUT / 2, BOTTOM, TOP)
@@ -792,7 +796,7 @@ def generar_consolidado(cfg: dict, grupos=None, destino=None, registrar=True):
         destino = CONSOLIDADOS_DIR / f"{ahora:%Y-%m-%d_%H%M}.pdf"
         if destino.exists():
             destino = CONSOLIDADOS_DIR / f"{ahora:%Y-%m-%d_%H%M%S}.pdf"
-    _render(destino, arts, paginas, numero, ahora, st)
+    _render(destino, arts, paginas, numero, ahora, st, cfg)
     if registrar:
         fechas = [g["fecha_hecho"] for g in grupos if g["fecha_hecho"]]
         storage.registrar_consolidado(destino, min(fechas) if fechas else None,

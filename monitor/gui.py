@@ -10,8 +10,9 @@ from tkinter import messagebox, ttk
 
 from . import storage
 from .analisis import ciclo_fase2, fase2_lock
-from .config import (EXCEL_PATH, PROFILE_DIR, get_api_key, load_config, nombre_medio,
+from .config import (BASE_DIR, EXCEL_PATH, PROFILE_DIR, get_api_key, load_config, nombre_medio,
                      normalize_page_url, page_slug, save_config, set_api_key)
+from .editor import EditorNota
 from .scraper import interactive_login
 from .worker import browser_lock, procesar_post, revisar
 
@@ -289,7 +290,22 @@ class App(tk.Tk):
             cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_dashboard())
         ttk.Button(fb, text="Abrir Excel", command=self._open_excel).pack(side="right")
         ttk.Button(fb, text="Último boletín", command=self._open_last_consolidado).pack(side="right", padx=4)
-        ttk.Button(fb, text="📄 Generar boletín PDF", command=lambda: self._run_fase2(True)).pack(side="right")
+        ttk.Button(fb, text="📰 Generar periódico", style="Accent.TButton",
+                   command=self._publicar).pack(side="right", padx=(4, 0))
+        ttk.Button(fb, text="👁 Vista previa", command=self._vista_previa).pack(side="right")
+
+        # barra del editor
+        eb = ttk.Frame(tab)
+        eb.pack(fill="x", pady=(0, 4))
+        ttk.Label(eb, text="Periódico:", style="Muted.TLabel").pack(side="left")
+        ttk.Button(eb, text="✎ Editar nota", command=self._editar).pack(side="left", padx=(6, 0))
+        ttk.Button(eb, text="☑ Incluir / ☐ Excluir", command=self._toggle_incluir).pack(side="left", padx=4)
+        ttk.Button(eb, text="Incluir todas", command=lambda: self._incluir_todas(True)).pack(side="left")
+        ttk.Button(eb, text="Excluir todas", command=lambda: self._incluir_todas(False)).pack(side="left", padx=4)
+        self.lbl_va = ttk.Label(eb, text="", style="Muted.TLabel")
+        self.lbl_va.pack(side="left", padx=10)
+        ttk.Label(eb, text="Clic en ☑ para incluir o sacar · doble clic para editar texto y foto",
+                  style="Muted.TLabel").pack(side="right")
 
         # chips por tema
         self.chips = ttk.Frame(tab)
@@ -299,9 +315,9 @@ class App(tk.Tk):
         pw.pack(fill="both", expand=True)
         left = ttk.Frame(pw)
         pw.add(left, weight=3)
-        cols = ("marca", "hora", "titular", "medios", "n", "tema", "pdf")
+        cols = ("va", "marca", "hora", "titular", "medios", "n", "tema", "pdf")
         self.gtree = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse")
-        for c, t, w, anc in (("marca", "", 28, "center"), ("hora", "Hora", 78, "w"),
+        for c, t, w, anc in (("va", "Va", 34, "center"), ("marca", "", 28, "center"), ("hora", "Hora", 78, "w"),
                              ("titular", "Titular", 300, "w"), ("medios", "Medios", 150, "w"),
                              ("n", "Fuentes", 56, "center"), ("tema", "Tema", 115, "w"),
                              ("pdf", "Boletín", 72, "w")):
@@ -314,6 +330,9 @@ class App(tk.Tk):
         self.gtree.pack(side="left", fill="both", expand=True)
         sb.pack(side="left", fill="y")
         self.gtree.bind("<<TreeviewSelect>>", self._on_select_grupo)
+        self.gtree.bind("<Button-1>", self._click_va, add="+")
+        self.gtree.bind("<Double-1>", lambda e: self._editar())
+        self.gtree.tag_configure("fuera", foreground="#9CA3AF")
 
         right = ttk.Frame(pw, padding=(10, 0, 0, 0))
         pw.add(right, weight=2)
@@ -824,11 +843,18 @@ class App(tk.Tk):
                 tags.append("nuevo")
             pdf = {"publicado": f"N° {g['ultimo_pdf']}", "actualizacion": "Actualizar",
                    "nuevo": "Pendiente"}.get(g["estado_pdf"], g["estado_pdf"])
+            pendiente = g["estado_pdf"] in ("nuevo", "actualizacion")
+            va_si = (g["en_periodico"] if g["en_periodico"] is not None else 1) == 1
+            if pendiente and not va_si:
+                tags.append("fuera")
+            va = ("☑" if va_si else "☐") if pendiente else "—"
             self.gtree.insert("", "end", iid=str(g["id"]), tags=tags, values=(
-                "◆" if multi else "", _fecha_corta(g["fecha_hecho"]), g["titular"], g["medios"],
+                va, "◆" if multi else "", _fecha_corta(g["fecha_hecho"]), g["titular"], g["medios"],
                 g["n_fuentes"], g["tema"], pdf))
         if sel and self.gtree.exists(sel[0]):
             self.gtree.selection_set(sel[0])
+        listos = storage.grupos_para_pdf()
+        self.lbl_va.configure(text=f"{len(listos)} noticia(s) irán en el próximo periódico")
 
     def _chip(self, tema):
         self.d_tema.set(tema if self.d_tema.get() != tema else "Todos")
@@ -896,6 +922,85 @@ class App(tk.Tk):
             o.add("\n")
             o.add((p["texto"] or "") + "\n\n", "orig")
         o.done()
+
+    # ================================================================== periódico: selección y edición
+    def _gid_sel(self):
+        s = self.gtree.selection()
+        return int(s[0]) if s else None
+
+    def _click_va(self, e):
+        if self.gtree.identify_region(e.x, e.y) != "cell" or self.gtree.identify_column(e.x) != "#1":
+            return
+        fila = self.gtree.identify_row(e.y)
+        if fila and self.gtree.set(fila, "va") in ("☑", "☐"):
+            storage.set_en_periodico([int(fila)], self.gtree.set(fila, "va") == "☐")
+            self._refresh_dashboard()
+
+    def _toggle_incluir(self):
+        gid = self._gid_sel()
+        if gid is None:
+            return
+        g = storage.get_grupo(gid)
+        storage.set_en_periodico([gid], (g["en_periodico"] if g["en_periodico"] is not None else 1) == 0)
+        self._refresh_dashboard()
+
+    def _incluir_todas(self, valor):
+        """Aplica a las noticias que se ven ahora en la tabla (respeta los filtros)."""
+        storage.set_en_periodico([int(i) for i in self.gtree.get_children()], valor)
+        self._refresh_dashboard()
+
+    def _editar(self):
+        gid = self._gid_sel()
+        if gid is None:
+            messagebox.showinfo("Editar nota", "Selecciona una noticia en la tabla.")
+            return
+        EditorNota(self, gid, self._cfg_actual(),
+                   on_save=lambda: (self._refresh_dashboard(), self._on_select_grupo()))
+
+    def _generar_pdf(self, previa: bool):
+        from .consolidado import generar_consolidado
+        if self.running or fase2_lock.locked():
+            messagebox.showwarning("Periódico", "Espera a que termine la revisión o el análisis en curso.")
+            return
+        n = len(storage.grupos_para_pdf())
+        if not n:
+            messagebox.showinfo("Periódico", "No hay noticias marcadas (☑) pendientes de publicar.")
+            return
+        if not previa and not messagebox.askyesno(
+                "Generar periódico",
+                f"Se generará el boletín N° {storage.siguiente_consolidado()} con {n} noticia(s).\n"
+                "Esas noticias quedarán marcadas como publicadas. ¿Continuar?"):
+            return
+        cfg = self._cfg_actual()
+        self._set_busy(True, "Armando la vista previa…" if previa else "Generando el periódico…")
+        self.last_error = ""
+
+        def run():
+            try:
+                with fase2_lock:
+                    if previa:
+                        out = generar_consolidado(cfg, destino=BASE_DIR / "data" / "vista_previa.pdf",
+                                                  registrar=False)
+                    else:
+                        out = generar_consolidado(cfg)
+                if out:
+                    os.startfile(str(out))  # noqa: S606
+                    self.q.put(("status", ("Vista previa lista: " if previa else "Periódico generado: ") + str(out)))
+            except PermissionError:
+                self.q.put(("error", "Cierra la vista previa anterior en el visor de PDF y vuelve a intentar."))
+            except Exception as e:  # noqa: BLE001
+                self.q.put(("error", f"Periódico: {e}"))
+            finally:
+                self.q.put(("fase2_fin", None))
+                self.q.put(("fase2_manual_fin", None))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _vista_previa(self):
+        self._generar_pdf(True)
+
+    def _publicar(self):
+        self._generar_pdf(False)
 
     def _open_last_consolidado(self):
         c = storage.ultimo_consolidado()

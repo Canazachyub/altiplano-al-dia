@@ -32,7 +32,7 @@ DEFAULTS = {
     "headless": False,
     # --- Fase 2
     "fase2_auto": True,             # cruce + clasificación con Claude al final de cada revisión
-    "pdf_consolidado_auto": True,   # boletín consolidado al final de cada ciclo
+    "pdf_consolidado_auto": False,  # el periódico se genera a mano tras revisar (Dashboard)
     "ventana_cruce_horas": 48,
     "ambitos": ["DISTRITAL", "LOCAL", "REGIONAL", "NACIONAL", "INTERNACIONAL"],
     "temas": ["Política", "Deportes", "Economía", "Educación", "Salud", "Seguridad/Policiales",
