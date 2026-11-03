@@ -18,9 +18,23 @@ import threading  # noqa: E402
 
 threading.excepthook = lambda a: _log_exc(a.exc_type, a.exc_value, a.exc_traceback)
 
-from monitor.gui import App  # noqa: E402
+from monitor.proceso import cerrar_navegador_monitor, traer_ventana_existente, unica_instancia  # noqa: E402
 
 if __name__ == "__main__":
+    if not unica_instancia():
+        # ya hay una copia abierta: se muestra esa y no se abre otra (evita revisiones duplicadas)
+        traer_ventana_existente()
+        import tkinter as tk
+        from tkinter import messagebox
+        r = tk.Tk()
+        r.withdraw()
+        messagebox.showinfo("Altiplano al Día", "La aplicación ya está abierta. Se mostró la ventana existente.")
+        r.destroy()
+        sys.exit(0)
+    cerrar_navegador_monitor()      # restos de una sesión anterior que se cerró mal
+
+    from monitor.gui import App
+
     app = App()
     app.report_callback_exception = _log_exc
     app.mainloop()

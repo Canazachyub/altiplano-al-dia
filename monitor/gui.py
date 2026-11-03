@@ -14,6 +14,7 @@ from .config import (BASE_DIR, EXCEL_PATH, PROFILE_DIR, get_api_key, load_config
                      normalize_page_url, page_slug, save_config, set_api_key)
 from .editor import EditorNota
 from .gui_portada import PortadaTab
+from .proceso import cerrar_navegador_monitor
 from .scraper import interactive_login
 from .worker import browser_lock, detener, procesar_post, revisar
 
@@ -131,6 +132,35 @@ class App(tk.Tk):
         self._schedule(initial=True)
         self.after(400, self._poll_queue)
         self.after(1000, self._tick)
+        self.protocol("WM_DELETE_WINDOW", self._cerrar)
+        self._cerrando = False
+
+    # ================================================================== cierre
+    def _cerrar(self):
+        """Al cerrar la ventana: corta la revisión, cierra el navegador del monitor y termina el proceso."""
+        if self._cerrando:
+            return
+        if self.running or fase2_lock.locked():
+            if not messagebox.askyesno("Cerrar", "Hay una revisión en curso. Se detendrá y se cerrará el "
+                                                 "navegador del monitor. ¿Cerrar la aplicación?"):
+                return
+        self._cerrando = True
+        detener.set()
+        self.next_check = None
+        self.title("Cerrando…")
+        self._set_busy(True, "Cerrando: deteniendo la revisión y el navegador…")
+        self._esperar_cierre(0)
+
+    def _esperar_cierre(self, intentos):
+        # hasta ~8 s para que el hilo de revisión cierre el navegador por sí mismo
+        if (browser_lock.locked() or fase2_lock.locked()) and intentos < 16:
+            self.after(500, lambda: self._esperar_cierre(intentos + 1))
+            return
+        cerrar_navegador_monitor()          # por si quedó alguno abierto
+        try:
+            self.destroy()
+        finally:
+            os._exit(0)                      # termina también los hilos que sigan vivos
 
     # ================================================================== estilo
     def _style(self):

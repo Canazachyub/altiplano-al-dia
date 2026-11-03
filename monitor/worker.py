@@ -3,7 +3,6 @@ Corre en un hilo aparte; se comunica con la GUI mediante emit(evento, dato)."""
 import logging
 import random
 import threading
-import time
 
 from playwright.sync_api import sync_playwright
 
@@ -84,6 +83,11 @@ def revisar(cfg: dict, emit) -> None:
                         emit("error", str(e))
                         break
                     except Exception as e:  # noqa: BLE001
+                        if "has been closed" in str(e) or "Target closed" in str(e):
+                            log.warning("Navegador cerrado durante la revisión de %s", slug)
+                            emit("error", "Se cerró la ventana del navegador: revisión interrumpida. "
+                                          "No cierres esa ventana mientras se revisa (usa ■ Detener).")
+                            break
                         log.exception("Scraping %s", slug)
                         emit("error", f"{slug}: {e}")
                         continue

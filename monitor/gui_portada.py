@@ -274,6 +274,7 @@ class PortadaTab(ttk.Frame):
                 portada.textos_portada(self.app._cfg_actual(), sel, principal)
                 self.after(0, lambda: (self.recargar(), self.app._aviso("Titulares de portada listos.", "ok")))
             except Exception as e:  # noqa: BLE001
-                self.after(0, lambda: self.app._aviso(f"Claude: {e}", "error"))
+                msg = f"Claude: {e}"
+                self.after(0, lambda: self.app._aviso(msg, "error"))
 
         threading.Thread(target=run, daemon=True).start()

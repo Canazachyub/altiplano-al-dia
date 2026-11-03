@@ -16,7 +16,7 @@ from xml.sax.saxutils import escape
 
 from PIL import Image
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader, simpleSplit
@@ -26,7 +26,7 @@ from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Frame, Paragraph, Spacer, Table, TableStyle
 
 from . import storage
-from .config import ASSETS_DIR, CONSOLIDADOS_DIR, nombre_medio
+from .config import ASSETS_DIR, CONSOLIDADOS_DIR
 
 # ------------------------------------------------------------------ identidad visual
 AZUL = colors.HexColor("#043F9B")       # azul del logo

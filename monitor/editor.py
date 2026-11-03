@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 
 from . import storage
-from .config import IMG_DIR, nombre_medio
+from .config import nombre_medio
 
 F = "Segoe UI"
 MUTED = "#6B7280"
