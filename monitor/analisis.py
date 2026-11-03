@@ -16,7 +16,7 @@ import time
 import requests
 
 from . import storage
-from .ai import fetch_article
+from .ai import ESTILO, RECORDATORIO, fetch_article, menciona_medio
 from .config import API_LOG_PATH, get_api_key, nombre_medio
 
 API_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -159,22 +159,24 @@ def clasificar_y_agrupar(cfg: dict, emit=lambda *a: None) -> int:
 
 
 # ------------------------------------------------------------------ 2. nota combinada
-SYS_COMBINAR = """Eres editor de un agregador de noticias de Puno (Perú). Recibes varias
-publicaciones de MEDIOS DISTINTOS sobre el MISMO hecho. Redacta UNA sola nota combinada,
-más completa que cada fuente por separado.
+SYS_COMBINAR = ESTILO + """
 
-Reglas estrictas:
-- Usa solo información presente en las fuentes. No inventes nada.
-- Junta quién, qué, cuándo, dónde, cifras y declaraciones de todas las fuentes.
-- Atribuye los datos en el cuerpo ("según Diario Los Andes…", "La República informó…").
-- Si las fuentes dan datos distintos (cifras, nombres, fechas, lugares), NO elijas uno:
-  muéstralos en el cuerpo y regístralos en DISCREPANCIAS.
-- En DATOS, cada dato lleva la lista de medios que lo aportan.
+Recibes varias publicaciones de distintas fuentes sobre el MISMO hecho. Escribe UNA sola nota
+propia, más completa que cada fuente por separado, juntando quién, qué, cuándo, dónde, cifras
+y declaraciones de todas ellas.
+
+- TITULAR, BAJADA y CUERPO NO nombran a ningún medio (ver la regla PROHIBIDO).
+- Si las fuentes dan datos distintos (cifras, nombres, fechas, lugares), NO elijas uno ni
+  digas quién dijo qué: en el CUERPO preséntalo de forma neutral ("las cifras preliminares
+  varían entre 12 y 15 heridos", "la hora exacta aún no está confirmada") y registra el
+  detalle por medio en DISCREPANCIAS.
+- DATOS, DISCREPANCIAS y FUENTES son fichas internas de verificación para el editor, no se
+  publican: ahí SÍ se indica qué medio aporta cada dato.
 
 Responde SOLO JSON:
 {
- "TITULAR": "máx. 14 palabras",
- "BAJADA": "1-2 líneas",
+ "TITULAR": "…",
+ "BAJADA": "…",
  "CUERPO": "párrafos separados por \\n\\n",
  "DATOS": [{"dato": "…", "fuentes": ["medio", "…"]}],
  "DISCREPANCIAS": [{"aspecto": "…", "versiones": [{"medio": "…", "dice": "…"}]}],
@@ -220,7 +222,13 @@ def generar_notas(cfg: dict, emit=lambda *a: None) -> int:
                 fuentes.append(f)
             user = json.dumps({"temas_permitidos": cfg["temas"], "fuentes": fuentes}, ensure_ascii=False)
             try:
-                nota = claude_json(cfg, SYS_COMBINAR, user, f"combinar[g{g['id']},{len(posts)}f]", 5000)
+                tarea = f"combinar[g{g['id']},{len(posts)}f]"
+                nota = claude_json(cfg, SYS_COMBINAR, user, tarea, 5000)
+                culpable = menciona_medio(nota, medios + [p["pagina"] for p in posts])
+                if culpable:  # un solo reintento, con recordatorio
+                    api_log.info("%s nombraba al medio %s: se reescribe", tarea, culpable)
+                    nota = claude_json(cfg, SYS_COMBINAR, user + RECORDATORIO.format(medio=culpable),
+                                       tarea + "+reintento", 5000)
                 nota["_origen"] = "claude:combinada"
             except Exception as e:  # noqa: BLE001
                 emit("error", f"Nota grupo {g['id']}: {e}")

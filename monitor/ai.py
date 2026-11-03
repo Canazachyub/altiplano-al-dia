@@ -5,24 +5,78 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
-from .config import get_api_key
+from .config import get_api_key, nombre_medio
 
-SYSTEM = """Eres un editor de noticias regionales de Puno (Perú). Recibes el texto de una
-publicación de Facebook de un medio o institución y, si existe, el texto de la nota
-enlazada. Redacta una nota periodística en español neutro.
+ESTILO = """Eres el redactor principal de "Altiplano al Día", un medio de noticias de Puno (Perú).
+Tu trabajo NO es resumir lo que dijo otro medio: es escribir TU PROPIA nota, con voz propia,
+usando como materia prima la información ya publicada.
 
-Reglas:
+PROHIBIDO (regla más importante):
+- Nombrar o aludir al medio, radio, diario, canal o página de donde sale la información.
+  Nada de "según Radio X", "informó Diario Y", "La República publicó", "en su página de
+  Facebook", "fuentes periodísticas", "un medio local", "la publicación", "el post".
+  Los hechos se cuentan en voz propia, como si nuestro equipo los hubiera reportado.
+- Sí se nombra a las personas, autoridades e instituciones que son PROTAGONISTAS del hecho
+  o que dan declaraciones (p. ej. "la UNA Puno anunció…", "el alcalde declaró…"). Lo que no
+  se nombra es al medio que difundió la noticia.
+
+ESTRUCTURA (pirámide invertida, que enganche e informe):
+- TITULAR: concreto, con verbo en activo y el dato más fuerte. Máximo 14 palabras.
+  Sin signos de exclamación, sin clickbait, sin mayúsculas sostenidas.
+- BAJADA: 1 o 2 líneas que completan el titular con el segundo dato clave (dónde, cuánto, a quién afecta).
+- CUERPO, en párrafos separados por \\n\\n:
+  1. Lead: un primer párrafo de 1 o 2 oraciones que responde qué, quién, dónde y cuándo,
+     y que haga querer seguir leyendo.
+  2. Desarrollo: los detalles en orden de importancia, cifras, declaraciones entre comillas
+     (solo si están en la fuente, atribuidas a quien las dijo) y antecedentes que estén en la fuente.
+  3. Cierre: qué sigue, a quién afecta o qué deben saber los lectores (plazos, lugares, requisitos),
+     solo si la fuente lo permite.
+
+ESTILO:
+- Español neutro, claro y elegante. Oraciones cortas o medianas, una idea por oración.
+- Vocabulario preciso y cercano; nada de jerga burocrática ni de relleno ("cabe resaltar",
+  "es importante mencionar", "en ese sentido").
+- Párrafos de 2 a 4 oraciones. Fechas y horas concretas en lugar de "ayer" u "hoy" cuando se conozcan.
+- Tono informativo y sobrio: no opines, no adjetives de más.
+
+RIGOR:
 - NO inventes datos, nombres, cifras, fechas ni citas que no estén en la fuente.
-- Si la fuente es escueta, el CUERPO puede ser breve; no rellenes con suposiciones.
-- Si la publicación no es una noticia (saludo, condolencia, aviso), redáctala igual de forma informativa.
+- Si la fuente es escueta, la nota es breve: es mejor corta y exacta que larga y con supuestos."""
+
+SYSTEM = ESTILO + """
+
+Recibes el texto de una publicación y, si existe, el texto de la nota enlazada.
+Si la publicación no es una noticia (saludo, condolencia, aviso), redáctala igual de forma informativa.
 
 Responde SOLO con un objeto JSON válido, sin texto adicional, con estas claves:
 {
-  "TITULAR": "titular informativo, máximo 14 palabras",
-  "BAJADA": "1 o 2 líneas que resumen la noticia",
-  "CUERPO": "redacción ampliada en párrafos separados por \\n\\n",
+  "TITULAR": "…",
+  "BAJADA": "…",
+  "CUERPO": "párrafos separados por \\n\\n",
   "DATOS": ["dato o cifra importante", "..."]
 }"""
+
+_VERBOS_ATRIB = (r"seg[uú]n|inform[oóa]|report[oóa]|public[oóa]|difund|de acuerdo (?:con|a)|"
+                 r"indic[oóa]|señal[oóa]|dio a conocer|da a conocer|precis[oóa]|detall[oóa]|"
+                 r"consign[oóa]|recog|transmiti")
+
+
+def menciona_medio(data: dict, medios: list[str]) -> str | None:
+    """Devuelve el medio si la redacción se lo atribuye (\"según X\", \"X informó\")."""
+    texto = " ".join(str(data.get(k, "")) for k in ("TITULAR", "BAJADA", "CUERPO"))
+    for m in {m.strip() for m in medios if m and len(m.strip()) > 2}:
+        n = re.escape(m)
+        if re.search(rf"(?:{_VERBOS_ATRIB})\W+(?:\w+\W+){{0,3}}?{n}\b", texto, re.I) or \
+           re.search(rf"\b{n}\W+(?:\w+\W+){{0,2}}?(?:{_VERBOS_ATRIB})", texto, re.I):
+            return m
+    if re.search(r"(p[aá]gina|cuenta|fanpage) de facebook|la publicaci[oó]n (original|de)|"
+                 r"medios? (local|regional|de comunicaci)", texto, re.I):
+        return "Facebook / medio"
+    return None
+
+
+RECORDATORIO = ("\n\nATENCIÓN: tu borrador anterior atribuía la información a un medio ({medio}). "
+                "Reescribe la nota en voz propia, sin nombrar a ningún medio, radio, diario ni página.")
 
 
 def fetch_article(url: str, max_chars: int = 8000) -> str:
@@ -93,15 +147,22 @@ def redactar(post: dict, cfg: dict) -> dict:
     if not key:
         raise RuntimeError(f"Falta la API key de {proveedor}.")
     nota = fetch_article(post.get("enlace_ext"))
-    user = (f"PÁGINA FUENTE: {post['pagina']}\nFECHA: {post.get('publicado') or 'desconocida'}\n\n"
+    medio = nombre_medio(post["pagina"], cfg)
+    user = (f"MEDIO QUE LO DIFUNDIÓ (solo referencia interna, NO lo menciones): {medio}\n"
+            f"FECHA DE PUBLICACIÓN: {post.get('publicado') or 'desconocida'}\n\n"
             f"TEXTO DE LA PUBLICACIÓN:\n{post.get('texto') or '(sin texto)'}\n")
     if nota:
-        user += f"\nTEXTO DE LA NOTA ENLAZADA ({post['enlace_ext']}):\n{nota}\n"
-    if proveedor == "claude":
-        content = _call_claude(cfg["modelo_claude"], user, key)
-    else:
-        content = _call_deepseek(cfg["modelo_deepseek"], user, key)
-    data = _parse_json(content)
+        user += f"\nTEXTO DE LA NOTA ENLAZADA:\n{nota}\n"
+
+    def llamar(u):
+        if proveedor == "claude":
+            return _parse_json(_call_claude(cfg["modelo_claude"], u, key))
+        return _parse_json(_call_deepseek(cfg["modelo_deepseek"], u, key))
+
+    data = llamar(user)
+    culpable = menciona_medio(data, [medio, post["pagina"]])
+    if culpable:  # un solo reintento, con recordatorio
+        data = llamar(user + RECORDATORIO.format(medio=culpable))
     # los enlaces no se le piden a la IA: se ponen los reales
     data["LINKS"] = {"facebook": post.get("permalink"), "externo": post.get("enlace_ext")}
     data["_proveedor"] = proveedor
