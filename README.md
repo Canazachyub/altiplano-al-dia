@@ -21,6 +21,21 @@ noticia.
 
 Necesita internet durante la instalación (unos 150 MB entre Python y las dependencias).
 
+## Actualizar a la versión nueva (en cualquier PC)
+
+Doble clic en **`ACTUALIZAR.bat`** (en la carpeta del programa). Cierra la app, baja la versión
+nueva de GitHub (con Git si se instaló con `git clone`, o el ZIP si se instaló descargando el ZIP),
+instala lo que falte y vuelve a abrir la app. **Conserva tus datos**: `.env` (keys), `data/`
+(noticias, diseño, avisos, portada), `fb_profile/` (sesión de Facebook), `pdfs/`, `config.json` y
+`noticias.xlsx`.
+
+Si tu instalación es anterior a que existiera `ACTUALIZAR.bat`, bájalo una vez abriendo PowerShell
+en la carpeta del programa y pegando:
+
+```
+iwr https://raw.githubusercontent.com/Canazachyub/altiplano-al-dia/main/ACTUALIZAR.bat -OutFile ACTUALIZAR.bat; .\ACTUALIZAR.bat
+```
+
 ## Primer inicio
 
 1. **Configuración → Iniciar sesión en Facebook**: se abre una ventana de Chrome (o Edge) con un
