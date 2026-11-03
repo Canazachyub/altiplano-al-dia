@@ -181,6 +181,11 @@ Cada llamada a Claude (tokens de entrada y salida, duración, errores) queda en 
     usa también al publicar;
   - **📰 Publicar este periódico** lo publica tal como se ve.
 - **📰 Generar periódico** lo genera de verdad y marca esas noticias como publicadas.
+- **📂 Publicados** (o *Vista previa* cuando no hay pendientes): lista de periódicos ya publicados;
+  *Ver y corregir* abre uno en la vista previa con todas las herramientas (editar noticias, fotos,
+  datos, avisos, diseño, añadir o quitar noticias) y **💾 Guardar cambios en el N° X** rehace ese
+  mismo PDF con el mismo número y fecha (si el PDF está abierto en otro programa, guarda una copia
+  `_corregido`). Quitar una noticia de un publicado la devuelve a pendientes como ☐ No va.
 - **Pestaña Portada**: 6 lugares (principal, lateral, destacada y tres abajo). En cada uno eliges la
   noticia, su foto (*Cambiar foto…*, *Otra foto de la noticia*, *Sin foto*) y los textos de portada.
   Avisa si la foto es pequeña para ese lugar (se vería borrosa). *Titulares con Claude* escribe los

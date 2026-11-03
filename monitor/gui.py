@@ -418,7 +418,7 @@ class App(tk.Tk):
         for cb in (self.d_periodo, self.d_tema):
             cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_dashboard())
         ttk.Button(fb, text="Abrir Excel", command=self._open_excel).pack(side="right")
-        ttk.Button(fb, text="Último boletín", command=self._open_last_consolidado).pack(side="right", padx=4)
+        ttk.Button(fb, text="📂 Publicados", command=self._publicados).pack(side="right", padx=4)
         ttk.Button(fb, text="📰 Generar periódico", style="Accent.TButton",
                    command=self._publicar).pack(side="right", padx=(4, 0))
         ttk.Button(fb, text="👁 Vista previa", command=self._vista_previa).pack(side="right")
@@ -1243,15 +1243,68 @@ class App(tk.Tk):
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _vista_previa(self):
-        """Abre la vista previa interactiva (dentro de la app)."""
-        if not storage.grupos_para_pdf():
-            self._aviso("No hay noticias marcadas (☑) pendientes de publicar.", "warn")
+    def _vista_previa(self, edicion=None):
+        """Abre la vista previa interactiva: el próximo periódico o (edicion=N) uno ya publicado."""
+        if edicion is None and not storage.grupos_para_pdf():
+            ult = storage.ultimo_consolidado()
+            if ult and messagebox.askyesno(
+                    "Vista previa", "No hay noticias pendientes para un periódico nuevo.\n\n"
+                                    f"¿Abrir el último publicado (N° {ult['n']}) para verlo o corregirlo?"):
+                self._vista_previa(ult["n"])
+            elif not ult:
+                self._aviso("No hay noticias marcadas (☑) pendientes de publicar.", "warn")
             return
-        if self._ventana_previa is not None and self._ventana_previa.winfo_exists():
-            self._ventana_previa.traer()
+        v = self._ventana_previa
+        if v is not None and v.winfo_exists():
+            if getattr(v, "edicion", None) == edicion:
+                v.traer()
+                return
+            v._cerrar()
+        self._ventana_previa = VistaPrevia(self, edicion)
+
+    def _publicados(self):
+        """Lista de periódicos publicados: ver/corregir en la vista previa o abrir el PDF."""
+        filas = storage.list_consolidados()
+        if not filas:
+            self._aviso("Todavía no se publicó ningún periódico.", "info")
             return
-        self._ventana_previa = VistaPrevia(self)
+        w = tk.Toplevel(self)
+        w.title("Periódicos publicados")
+        w.geometry("720x420")
+        w.transient(self)
+        tr = ttk.Treeview(w, columns=("n", "fecha", "notas", "archivo"), show="headings", selectmode="browse")
+        for c, t, a in (("n", "N°", 60), ("fecha", "Fecha", 140), ("notas", "Noticias", 80), ("archivo", "Archivo", 400)):
+            tr.heading(c, text=t)
+            tr.column(c, width=a, anchor="center" if c != "archivo" else "w")
+        for c in filas:
+            tr.insert("", "end", iid=str(c["n"]), values=(c["n"], (c["fecha"] or "")[:16].replace("T", " "),
+                                                         c["n_noticias"], os.path.basename(c["path"] or "")))
+        tr.pack(fill="both", expand=True, padx=10, pady=(10, 4))
+        tr.selection_set(str(filas[0]["n"]))
+
+        def sel():
+            s = tr.selection()
+            return int(s[0]) if s else None
+
+        def ver():
+            n = sel()
+            if n:
+                w.destroy()
+                self._vista_previa(n)
+
+        def pdf():
+            n = sel()
+            c = storage.get_consolidado(n) if n else None
+            if c and os.path.exists(c["path"]):
+                os.startfile(c["path"])  # noqa: S606
+            else:
+                self._aviso("No se encuentra el PDF de ese periódico.", "warn")
+        tr.bind("<Double-1>", lambda e: ver())
+        pie = ttk.Frame(w, padding=10)
+        pie.pack(fill="x")
+        ttk.Button(pie, text="👁 Ver y corregir", style="Accent.TButton", command=ver).pack(side="right")
+        ttk.Button(pie, text="Abrir PDF", command=pdf).pack(side="right", padx=6)
+        ttk.Label(pie, text="Doble clic para abrirlo en la vista previa y corregirlo.", style="Muted.TLabel").pack(side="left")
 
     def _publicar(self):
         self._generar_pdf(False)

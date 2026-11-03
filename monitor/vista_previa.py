@@ -25,10 +25,13 @@ ZOOMS = [0.6, 0.8, 1.0, 1.25, 1.5, 2.0]
 
 
 class VistaPrevia(tk.Toplevel):
-    def __init__(self, app):
+    def __init__(self, app, edicion=None):
+        """edicion: número de un periódico ya publicado para verlo y corregirlo (None = el próximo)."""
         super().__init__(app)
         self.app = app
-        self.title("Vista previa del periódico — Altiplano al Día")
+        self.edicion = edicion
+        self.title(f"Periódico N° {edicion} (publicado) — Altiplano al Día" if edicion
+                   else "Vista previa del periódico — Altiplano al Día")
         self.geometry("1280x900")
         self.minsize(900, 600)
         self.configure(bg="#E9EDF4")
@@ -97,7 +100,8 @@ class VistaPrevia(tk.Toplevel):
         b.pack(fill="x")
         self.lbl_tit = tk.Label(b, text="Vista previa", bg=NAVY, fg="white", font=(F, 13, "bold"))
         self.lbl_tit.pack(side="left", padx=14, pady=8)
-        ttk.Button(b, text="📰 Publicar este periódico", style="Accent.TButton",
+        ttk.Button(b, text=(f"💾 Guardar cambios en el N° {self.edicion}" if self.edicion
+                            else "📰 Publicar este periódico"), style="Accent.TButton",
                    command=self._publicar).pack(side="right", padx=(4, 12), pady=6)
         ttk.Button(b, text="Abrir en visor PDF", style="Header.TButton",
                    command=lambda: self.ruta and os.startfile(str(self.ruta))).pack(side="right", padx=4)  # noqa: S606
@@ -127,7 +131,7 @@ class VistaPrevia(tk.Toplevel):
             self.after(3000, self.generar)
             return
         from .analisis import fase2_lock
-        if not storage.grupos_para_pdf():
+        if not self._grupos():
             self._mensaje("No hay noticias marcadas (☑) para el periódico.")
             return
         self._generando = True
@@ -140,7 +144,8 @@ class VistaPrevia(tk.Toplevel):
             from .consolidado import generar_consolidado
             try:
                 with fase2_lock:
-                    out = generar_consolidado(cfg, destino=destino, registrar=False)
+                    out = generar_consolidado(cfg, grupos=self._grupos(), destino=destino, registrar=False,
+                                              numero=self.edicion, ahora=self._fecha_edicion())
                 self.after(0, lambda: self._cargar(out))
             except Exception as e:  # noqa: BLE001
                 msg = f"No se pudo armar la vista previa: {e}"
@@ -168,8 +173,11 @@ class VistaPrevia(tk.Toplevel):
                     f.unlink()
                 except OSError:
                     pass
-        n = len(storage.grupos_para_pdf())
-        self.lbl_tit.configure(text=f"Vista previa · boletín N° {storage.siguiente_consolidado()} · {n} noticias")
+        n = len(self._grupos())
+        if self.edicion:
+            self.lbl_tit.configure(text=f"Periódico publicado N° {self.edicion} · {n} noticias · puedes corregirlo")
+        else:
+            self.lbl_tit.configure(text=f"Vista previa · boletín N° {storage.siguiente_consolidado()} · {n} noticias")
         self.pagina = min(self.pagina, len(self.doc) - 1)
         self._miniaturas()
         self._mensaje(None)
@@ -355,7 +363,26 @@ class VistaPrevia(tk.Toplevel):
             m.add_command(label="↺  Dejar que se ubique sola", command=lambda: self._soltar(gid))
         m.tk_popup(e.x_root, e.y_root)
 
+    # ------------------------------------------------------------------ qué noticias forman este periódico
+    def _grupos(self):
+        return storage.grupos_de_consolidado(self.edicion) if self.edicion else storage.grupos_para_pdf()
+
+    def _fecha_edicion(self):
+        if not self.edicion:
+            return None
+        c = storage.get_consolidado(self.edicion)
+        try:
+            return datetime.fromisoformat(c["fecha"])
+        except (TypeError, ValueError):
+            return None
+
     def _quitar(self, gid):
+        if self.edicion:
+            storage.sacar_de_edicion(gid)
+            self.app._refresh_dashboard()
+            self.app._aviso(f"Noticia quitada del N° {self.edicion} (queda en pendientes como ☐ No va).", "warn")
+            self.generar()
+            return
         storage.set_en_periodico([gid], False)
         lugares = {k: v for k, v in portada.leer_lugares().items() if v != gid}
         portada.guardar_lugares(lugares)
@@ -392,9 +419,12 @@ class VistaPrevia(tk.Toplevel):
     def anadir(self, gid, pag):
         """Pone una noticia en el periódico, en la página pag (desde un espacio libre)."""
         g = storage.get_grupo(gid)
-        if g["estado_pdf"] not in ("nuevo", "actualizacion"):
+        if self.edicion:
+            storage.poner_en_edicion(gid, self.edicion)             # entra en el periódico ya publicado
+        elif g["estado_pdf"] not in ("nuevo", "actualizacion"):
             storage.actualizar_grupo(gid, estado_pdf="nuevo")      # ya publicada: vuelve a salir
-        storage.set_en_periodico([gid], True)
+        if not self.edicion:
+            storage.set_en_periodico([gid], True)
         fijas = consolidado.leer_fijas()
         fijas[gid] = pag
         consolidado.guardar_fijas(fijas)
@@ -470,8 +500,32 @@ class VistaPrevia(tk.Toplevel):
         if self._generando:
             self.app._aviso("Espera a que termine de actualizarse la vista previa.", "warn")
             return
+        if self.edicion:
+            self._guardar_edicion()
+            return
         self._cerrar()
         self.app._publicar()
+
+    def _guardar_edicion(self):
+        """Rehace el PDF del periódico publicado con los cambios, con el mismo número."""
+        from pathlib import Path
+        c = storage.get_consolidado(self.edicion)
+        if not messagebox.askyesno("Guardar cambios",
+                                   f"Se rehará el periódico N° {self.edicion} con los cambios (mismo número y fecha)."
+                                   "\n\n¿Continuar?", parent=self):
+            return
+        destino = Path(c["path"])
+        try:                                    # si el PDF está abierto en otro programa, se guarda una versión nueva
+            if destino.exists():
+                destino.open("ab").close()
+        except OSError:
+            destino = destino.with_name(destino.stem + f"_corregido_{datetime.now():%H%M%S}.pdf")
+        grupos = self._grupos()
+        out = consolidado.generar_consolidado(self.app._cfg_actual(), grupos=grupos, destino=destino,
+                                              registrar=False, numero=self.edicion, ahora=self._fecha_edicion())
+        storage.actualizar_consolidado(self.edicion, out, len(grupos))
+        self.app._aviso(f"Periódico N° {self.edicion} actualizado: {out}", "ok", 7000)
+        os.startfile(str(out))  # noqa: S606
 
     def _cerrar(self):
         if self.doc is not None:
@@ -544,7 +598,10 @@ class ElegirNoticia(tk.Toplevel):
         for g in filas:
             pendiente = g["estado_pdf"] in ("nuevo", "actualizacion")
             va = (g["en_periodico"] if g["en_periodico"] is not None else 1) == 1
-            if pendiente and va:
+            if self.vista.edicion:
+                if not pendiente and g["ultimo_pdf"] == self.vista.edicion:
+                    continue                               # ya está en este periódico publicado
+            elif pendiente and va:
                 continue                                   # ya está en este periódico
             if f == self.FILTROS[0] and not (pendiente and not va):
                 continue

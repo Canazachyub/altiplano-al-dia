@@ -270,3 +270,36 @@ def set_en_periodico(gids, valor: bool) -> None:
 def guardar_nota(gid, nota: dict) -> None:
     """Guarda la nota editada a mano (texto, foto, portada)."""
     actualizar_grupo(gid, nota_json=nota, titular=nota.get("TITULAR") or None, actualizado=now_iso())
+
+
+def list_consolidados():
+    with _conn() as c:
+        return c.execute("SELECT * FROM consolidados ORDER BY n DESC").fetchall()
+
+
+def get_consolidado(n):
+    with _conn() as c:
+        return c.execute("SELECT * FROM consolidados WHERE n=?", (n,)).fetchone()
+
+
+def grupos_de_consolidado(n):
+    """Noticias que forman la edición publicada N° n (para verla o corregirla)."""
+    with _conn() as c:
+        return c.execute("SELECT * FROM grupos WHERE ultimo_pdf=? AND nota_json IS NOT NULL "
+                         "AND estado_pdf != 'descartado'", (n,)).fetchall()
+
+
+def poner_en_edicion(gid, n):
+    with _conn() as c:
+        c.execute("UPDATE grupos SET ultimo_pdf=?, estado_pdf='publicado', en_periodico=1 WHERE id=?", (n, gid))
+
+
+def sacar_de_edicion(gid):
+    """La noticia deja la edición publicada y vuelve a pendientes (marcada ☐ No va)."""
+    with _conn() as c:
+        c.execute("UPDATE grupos SET ultimo_pdf=NULL, estado_pdf='nuevo', en_periodico=0 WHERE id=?", (gid,))
+
+
+def actualizar_consolidado(n, path, n_noticias):
+    with _conn() as c:
+        c.execute("UPDATE consolidados SET path=?, n_noticias=? WHERE n=?", (str(path), n_noticias, n))

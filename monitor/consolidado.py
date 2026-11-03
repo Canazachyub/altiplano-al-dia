@@ -895,7 +895,7 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
     return paginas_de
 
 
-def generar_consolidado(cfg: dict, grupos=None, destino=None, registrar=True):
+def generar_consolidado(cfg: dict, grupos=None, destino=None, registrar=True, numero=None, ahora=None):
     """Genera el boletín con los grupos no publicados (nuevos o actualizados). None si no hay.
     grupos/destino/registrar permiten generar una vista previa sin marcar nada como publicado."""
     grupos = list(grupos if grupos is not None else storage.grupos_para_pdf())
@@ -904,8 +904,8 @@ def generar_consolidado(cfg: dict, grupos=None, destino=None, registrar=True):
     _aplicar_diseno()
     st = _st()
     arts = _ordenar([_articulo(g, cfg) for g in grupos], cfg)
-    numero = storage.siguiente_consolidado()
-    ahora = datetime.now()
+    numero = numero or storage.siguiente_consolidado()
+    ahora = ahora or datetime.now()
     paginas = _paginar(arts, st, leer_fijas())
     if destino is None:
         CONSOLIDADOS_DIR.mkdir(parents=True, exist_ok=True)

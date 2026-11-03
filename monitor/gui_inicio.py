@@ -143,7 +143,8 @@ class InicioTab(ttk.Frame):
                  "Elige qué noticia va en cada lugar de la portada, su foto y su titular.")
         p4.boton("📰  Publicar periódico", app._publicar, True,
                  "Genera el PDF final y marca esas noticias como publicadas.")
-        p4.boton("Abrir el último publicado", app._open_last_consolidado, False, "Abre el último PDF generado.")
+        p4.boton("📂 Ver o corregir publicados", app._publicados, False,
+                 "Abre un periódico ya publicado en la vista previa para verlo o corregirlo.")
         self.refrescar()
 
     # ------------------------------------------------------------------
