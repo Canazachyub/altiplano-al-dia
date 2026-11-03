@@ -46,6 +46,11 @@ La app abre en **🏠 Inicio**, que muestra el trabajo en 4 pasos con su estado 
 Si falta algo para empezar (API keys, sesión de Facebook, páginas activas), Inicio lo muestra
 arriba en amarillo con el botón para resolverlo. Al pasar el mouse sobre un botón aparece qué hace.
 
+Abajo está el **📋 Registro de actividad**: lo que va haciendo el programa en vivo (qué página revisa,
+noticias nuevas, IA, errores en rojo), con barra de desplazamiento para ver lo anterior. Se agranda
+arrastrando su borde, se oculta con el botón de la barra de estado y *Mostrar detalle técnico* añade
+las líneas internas del scraper.
+
 - **Páginas**: escribe la URL o el nombre (`radiopachamama`) y pulsa *Agregar*. *Activar/Pausar*
   la excluye de las revisiones sin borrarla (● activa, ○ pausada). Todo se guarda en `config.json`.
 - **Intervalo**: por defecto 30 min; cámbialo y pulsa *Aplicar*.

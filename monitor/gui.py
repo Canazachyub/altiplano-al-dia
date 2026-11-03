@@ -1,5 +1,6 @@
 """Interfaz Tkinter: Bandeja (Fase 1), Dashboard (Fase 2) y Configuración."""
 import json
+import logging
 import os
 import queue
 import threading
@@ -14,6 +15,7 @@ from .config import (BASE_DIR, EXCEL_PATH, PROFILE_DIR, get_api_key, load_config
                      normalize_page_url, page_slug, save_config, set_api_key)
 from .editor import EditorNota
 from .gui_inicio import InicioTab, Tip
+from .gui_registro import ColaHandler, PanelRegistro
 from .gui_portada import PortadaTab
 from .proceso import cerrar_navegador_monitor
 from .vista_previa import VistaPrevia
@@ -118,14 +120,23 @@ class App(tk.Tk):
 
         self._style()
         self._build_header()
-        self.nb = ttk.Notebook(self)
-        self.nb.pack(fill="both", expand=True, padx=12, pady=(8, 0))
+        self.paned = ttk.PanedWindow(self, orient="vertical")
+        self.paned.pack(fill="both", expand=True, padx=12, pady=(8, 0))
+        self.nb = ttk.Notebook(self.paned)
+        self.paned.add(self.nb, weight=5)
         self._build_bandeja()
         self._build_dashboard()
         self.portada_tab = PortadaTab(self.nb, self)
         self.nb.add(self.portada_tab, text="  📰 Portada  ")
         self._build_config()
         self._build_statusbar()
+        self.registro = PanelRegistro(self.paned, self)
+        self.paned.add(self.registro, weight=1)
+        self._registro_visible = True
+        self.after(400, self._altura_registro)
+        h = ColaHandler(self.q)
+        for nombre in ("monitor", "api"):
+            logging.getLogger(nombre).addHandler(h)
         self.inicio = InicioTab(self.nb, self)
         self.nb.insert(0, self.inicio, text="  🏠 Inicio  ")
         self.nb.select(self.inicio)
@@ -143,12 +154,48 @@ class App(tk.Tk):
         self._cerrando = False
         self._ventana_previa = None
 
+    def _altura_registro(self, alto=190):
+        """Deja el registro con ~9 líneas visibles (luego se cambia arrastrando el borde)."""
+        self.update_idletasks()
+        total = self.paned.winfo_height()
+        if total > 300:
+            self.paned.sashpos(0, max(200, total - alto))
+
+    def _toggle_registro(self):
+        if self._registro_visible:
+            self.paned.forget(self.registro)
+            self.btn_log.configure(text="📋 Ver registro")
+        else:
+            self.paned.add(self.registro, weight=1)
+            self.btn_log.configure(text="📋 Ocultar registro")
+            self.after(50, self._altura_registro)
+        self._registro_visible = not self._registro_visible
+
     def _ayudas(self):
+        Tip(self.btn_log, "Muestra u oculta el registro de lo que va haciendo el programa.")
         Tip(self.btn_fase2, "Cruza las noticias nuevas entre medios y escribe las notas con Claude. "
                             "Normalmente se hace solo al final de cada revisión.")
         Tip(self.btn_auto, "Prende o apaga la revisión automática cada cierto tiempo.")
         Tip(self.btn_now, "Busca noticias nuevas en Facebook ahora (atajo: F5).")
         Tip(self.btn_stop, "Corta la revisión en curso y cierra el navegador. Lo leído queda guardado.")
+
+    def _al_registro(self, ev, d):
+        if not hasattr(self, "registro"):
+            return
+        if ev == "status":
+            self.registro.agregar("PASO", str(d))
+        elif ev == "error":
+            self.registro.agregar("ERROR", f"✖ {d}")
+        elif ev == "nuevo":
+            r = storage.get_post(d)
+            self.registro.agregar("OK", f"＋ Noticia nueva: {nombre_medio(r['pagina'], self.cfg) if r else ''} · "
+                                        f"{((r['texto'] or '') if r else '')[:90].replace(chr(10), ' ')}")
+        elif ev == "consolidado":
+            self.registro.agregar("OK", f"📰 Periódico generado: {d}")
+        elif ev == "detenido":
+            self.registro.agregar("AVISO", "■ Revisión detenida por el usuario")
+        elif ev == "fin":
+            self.registro.agregar("OK", f"✔ Revisión terminada: {d} publicación(es) nueva(s)")
 
     def _refrescar_inicio(self):
         if hasattr(self, "inicio"):
@@ -255,7 +302,9 @@ class App(tk.Tk):
 
     def _build_statusbar(self):
         bar = tk.Frame(self, bg="#E4E8F0", height=26)
-        bar.pack(fill="x", side="bottom")
+        bar.pack(fill="x", side="bottom", before=self.paned)
+        self.btn_log = ttk.Button(bar, text="📋 Ocultar registro", command=self._toggle_registro)
+        self.btn_log.pack(side="right", padx=(4, 8), pady=1)
         self.status = tk.StringVar(value="Listo.")
         self.sched = tk.StringVar()
         tk.Label(bar, textvariable=self.status, bg="#E4E8F0", fg="#1F2937", anchor="w",
@@ -778,6 +827,11 @@ class App(tk.Tk):
         try:
             while True:
                 ev, d = self.q.get_nowait()
+                if ev == "log":
+                    self.registro.desde_logging(*d)
+                    continue
+                if ev in ("status", "error", "nuevo", "consolidado", "detenido", "fin"):
+                    self._al_registro(ev, d)
                 if ev == "status":
                     self.status.set(d)
                     if self.running:

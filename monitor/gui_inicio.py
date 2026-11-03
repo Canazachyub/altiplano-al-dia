@@ -243,9 +243,9 @@ class InicioTab(ttk.Frame):
         with storage._conn() as c:
             ult_pend = c.execute("SELECT titular, COALESCE(en_periodico,1) AS va FROM grupos "
                                  "WHERE estado_pdf IN ('nuevo','actualizacion') AND nota_json IS NOT NULL "
-                                 "ORDER BY COALESCE(fecha_hecho, actualizado) DESC LIMIT 9").fetchall()
+                                 "ORDER BY COALESCE(fecha_hecho, actualizado) DESC LIMIT 6").fetchall()
         p2.lista([(("☑  " if r["va"] else "☐  ") + (r["titular"] or "")[:70], "#111827" if r["va"] else MUTED)
-                  for r in ult_pend] + ([("…y más", MUTED)] if pendientes > 9 else []))
+                  for r in ult_pend] + ([("…y más", MUTED)] if pendientes > 6 else []))
 
         # paso 3
         fijados = len(portada.leer_lugares())
@@ -298,7 +298,7 @@ class InicioTab(ttk.Frame):
             import pypdfium2 as pdfium
             from PIL import ImageTk
             doc = pdfium.PdfDocument(str(ruta))
-            im = doc[0].render(scale=0.42).to_pil()
+            im = doc[0].render(scale=0.2).to_pil()
             doc.close()
             self._mini = ImageTk.PhotoImage(im)
         except Exception:  # noqa: BLE001
