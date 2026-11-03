@@ -14,7 +14,7 @@ from tkinter import messagebox, simpledialog, ttk
 import pypdfium2 as pdfium
 from PIL import ImageTk
 
-from . import consolidado, portada, storage
+from . import avisos, consolidado, portada, storage
 from .gui_diseno import PanelDiseno
 from .config import BASE_DIR
 
@@ -103,6 +103,7 @@ class VistaPrevia(tk.Toplevel):
                    command=lambda: self.ruta and os.startfile(str(self.ruta))).pack(side="right", padx=4)  # noqa: S606
         ttk.Button(b, text="⟳ Actualizar", style="Header.TButton", command=self.generar).pack(side="right", padx=4)
         ttk.Button(b, text="🎨 Diseño", style="Header.TButton", command=self._toggle_diseno).pack(side="right", padx=4)
+        ttk.Button(b, text="📢 Avisos", style="Header.TButton", command=self._gestor_avisos).pack(side="right", padx=4)
         ttk.Button(b, text="Ajustar", style="Header.TButton", command=lambda: self._zoom(None)).pack(side="right", padx=4)
         ttk.Button(b, text="+", width=3, style="Header.TButton", command=lambda: self._zoom(+1)).pack(side="right")
         ttk.Button(b, text="−", width=3, style="Header.TButton", command=lambda: self._zoom(-1)).pack(side="right", padx=4)
@@ -113,7 +114,7 @@ class VistaPrevia(tk.Toplevel):
         h = tk.Frame(self, bg="#E8F0FE")
         h.pack(fill="x")
         tk.Label(h, text="Clic en una noticia: editar texto, foto y titular.   Clic derecho: quitar, mover a otra "
-                         "página o a la portada.   Clic en «＋ Añadir noticia aquí»: llenar un espacio libre.   "
+                         "página o a la portada.   Clic en un espacio libre: poner una noticia o un aviso.   "
                          "🎨 Diseño: textos, colores y letras.",
                  bg="#E8F0FE", fg="#1D4ED8", font=(F, 9)).pack(side="left", padx=14, pady=4)
 
@@ -222,7 +223,7 @@ class VistaPrevia(tk.Toplevel):
                 X0, Y0, X1, Y1 = (self.ox + x0 * s, self.oy + (alto - y1) * s, self.ox + x1 * s, self.oy + (alto - y0) * s)
                 self.cv.create_rectangle(X0 + 3, Y0 + 3, X1 - 3, Y1 - 3, outline="#16A34A", width=2, dash=(5, 4),
                                          fill="#F0FDF4", stipple="gray25", tags="hueco")
-                self.cv.create_text((X0 + X1) / 2, (Y0 + Y1) / 2, text="＋ Añadir noticia aquí",
+                self.cv.create_text((X0 + X1) / 2, (Y0 + Y1) / 2, text="＋ Añadir noticia o aviso",
                                     fill="#15803D", font=(F, max(8, int(11 * s)), "bold"), tags="hueco",
                                     width=max(40, X1 - X0 - 16), justify="center")
         self.lista.itemconfigure("marco", outline="#DDE3EC")
@@ -292,7 +293,10 @@ class VistaPrevia(tk.Toplevel):
                                  outline="#2563EB", width=3, dash=(6, 3), tags="zona")
         self.cv.configure(cursor="hand2")
         if z.get("lugar") == "hueco":
-            self.tip.configure(text="Espacio libre: clic para añadir una noticia en esta página")
+            self.tip.configure(text="Espacio libre: clic para poner una noticia o un aviso")
+        elif z.get("lugar") == "aviso":
+            a = avisos.por_id(avisos.cargar(), z.get("aviso"))
+            self.tip.configure(text=f"Aviso «{(a or {}).get('nombre', '')}»: clic para cambiarlo o quitarlo")
         elif z.get("lugar") == "datos":
             self.tip.configure(text="Datos clave: clic para editarlos")
         else:
@@ -309,8 +313,8 @@ class VistaPrevia(tk.Toplevel):
         z = self._zona_en(e)
         if not z:
             return
-        if z.get("lugar") == "hueco":
-            ElegirNoticia(self, z["pag"])
+        if z.get("lugar") in ("hueco", "aviso"):
+            self._menu_espacio(z, e)
         elif z.get("lugar") == "datos":
             from .editor import EditorDatos
             EditorDatos(self, z["gids"], on_save=self._tras_cambio)
@@ -330,8 +334,8 @@ class VistaPrevia(tk.Toplevel):
         z = self._zona_en(e)
         if not z:
             return
-        if z.get("lugar") == "hueco":
-            ElegirNoticia(self, z["pag"])
+        if z.get("lugar") in ("hueco", "aviso"):
+            self._menu_espacio(z, e)
             return
         if z.get("lugar") == "datos":
             from .editor import EditorDatos
@@ -398,6 +402,47 @@ class VistaPrevia(tk.Toplevel):
         self.app._aviso(f"Noticia añadida en la página {pag}.", "ok")
         self.pagina = max(0, pag - 1)
         self.generar()
+
+    # ------------------------------------------------------------------ avisos
+    def _menu_espacio(self, z, e):
+        d = avisos.cargar()
+        clave = z.get("clave", "")
+        m = tk.Menu(self, tearoff=0)
+        m.add_command(label="📰  Poner una noticia aquí", command=lambda: ElegirNoticia(self, z["pag"]))
+        sub = tk.Menu(m, tearoff=0)
+        for a in d["avisos"]:
+            ok = avisos.listo(a)
+            sub.add_command(label=("" if ok else "⚠ ") + (a.get("nombre") or a.get("titulo") or "Aviso")
+                            + ("" if ok else "  (falta teléfono o imagen)"),
+                            command=lambda aid=a["id"]: self._poner_aviso(clave, aid))
+        sub.add_separator()
+        sub.add_command(label="Crear o editar avisos…", command=self._gestor_avisos)
+        m.add_cascade(label="📢  Poner un aviso aquí", menu=sub)
+        if z.get("lugar") == "aviso":
+            m.add_command(label="✖  Quitar el aviso (dejar en blanco)", command=lambda: self._poner_aviso(clave, ""))
+        if clave in d["colocados"]:
+            m.add_command(label="↺  Automático (lo decide el programa)", command=lambda: self._poner_aviso(clave, None))
+        m.tk_popup(e.x_root, e.y_root)
+
+    def _poner_aviso(self, clave, aid):
+        d = avisos.cargar()
+        if aid is None:
+            d["colocados"].pop(clave, None)
+        else:
+            a = avisos.por_id(d, aid) if aid else None
+            if aid and not avisos.listo(a):
+                messagebox.showinfo("Avisos", "A ese aviso le falta el teléfono (o la imagen). Complétalo en "
+                                              "📢 Avisos y vuelve a intentarlo.", parent=self)
+                self._gestor_avisos()
+                return
+            d["colocados"][clave] = aid
+        avisos.guardar(d)
+        self.generar()
+
+    def _gestor_avisos(self):
+        from .gui_avisos import GestorAvisos
+        GestorAvisos(self, al_guardar=lambda: (self.app._aviso("Avisos guardados. Actualizando…", "ok"),
+                                               self.generar()))
 
     def _toggle_diseno(self):
         if self._diseno_visible:

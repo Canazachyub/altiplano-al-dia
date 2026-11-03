@@ -26,7 +26,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Frame, Paragraph, Spacer, Table, TableStyle
 
-from . import diseno, storage
+from . import avisos, diseno, storage
 from .config import ASSETS_DIR, BASE_DIR, CONSOLIDADOS_DIR
 
 # ------------------------------------------------------------------ identidad visual
@@ -797,10 +797,18 @@ def _ordenar(arts, cfg):
     return sorted(arts, key=lambda a: (amb.get(a["ambito"], 99), peso(a)))
 
 
-def _hueco(pag, rect):
+def _hueco(pag, rect, clave=""):
     from . import portada
     if portada.ZONAS is not None:
-        portada.ZONAS.append({"pag": pag, "gid": None, "rect": [round(v, 1) for v in rect], "lugar": "hueco"})
+        portada.ZONAS.append({"pag": pag, "gid": None, "rect": [round(v, 1) for v in rect], "lugar": "hueco",
+                              "clave": clave})
+
+
+def _zona_aviso(pag, rect, clave, aid):
+    from . import portada
+    if portada.ZONAS is not None:
+        portada.ZONAS.append({"pag": pag, "gid": None, "rect": [round(v, 1) for v in rect], "lugar": "aviso",
+                              "clave": clave, "aviso": aid})
 
 
 def _zona(pag, a, rect):
@@ -824,6 +832,7 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
     portada.dibujar(c, cfg, arts, paginas_de, numero, ahora, {
         "AZUL": AZUL, "AZUL_CLARO": AZUL_CLARO, "AMARILLO": AMARILLO, "NEGRO": NEGRO, "W": W, "H": H,
         "recorte": _recorte, "icono": _icono, "logo": _logo, "logo_blanco": _logo_blanco, "ROJO": ROJO, "fecha_larga": _fecha_larga, "plano": _plano})
+    asignador = avisos.Asignador()
     for pg in paginas:
         c.showPage()
         if pg.portada:
@@ -865,7 +874,19 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
             if not (pg.portada and pila is pg.lat):
                 y_hueco = y - (GAP if pila else 0)
                 if y_hueco - BOTTOM > 70:
-                    _hueco(pg.n, (x, BOTTOM + 4, x + ancho, y_hueco))
+                    clave = f"{pg.n}:{'lat' if pila is pg.lat else 'main'}"
+                    alto_h = y_hueco - BOTTOM - 4
+                    av, _ = asignador.para(clave, alto_h)
+                    if av:
+                        # el aviso va abajo; si sobra mucho espacio arriba, queda libre para una noticia
+                        alto_av = min(alto_h, 230 if pila is pg.lat else 170)
+                        rect_av = (x, BOTTOM + 4, x + ancho, BOTTOM + 4 + alto_av)
+                        avisos.dibujar(c, av, rect_av, D)
+                        _zona_aviso(pg.n, rect_av, clave, av["id"])
+                        if alto_h - alto_av - GAP > 70:
+                            _hueco(pg.n, (x, BOTTOM + 4 + alto_av + GAP, x + ancho, y_hueco), clave)
+                    else:
+                        _hueco(pg.n, (x, BOTTOM + 4, x + ancho, y_hueco), clave)
         if pg.lat and not pg.portada:
             xr = pg.x_main + pg.w_main + GUT / 2 if not pg.lateral_izq else pg.x_main - GUT / 2
             _filete_v(c, xr, BOTTOM, pg.top)

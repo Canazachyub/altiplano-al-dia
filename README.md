@@ -147,6 +147,12 @@ Cada llamada a Claude (tokens de entrada y salida, duración, errores) queda en 
   - **＋ Añadir noticia aquí**: los espacios libres de cada página aparecen marcados en verde; con un
     clic se elige una noticia (de las que no iban, de las ya publicadas o de todas) y se coloca en esa
     página (la página se reacomoda sola);
+  - **📢 Avisos** en los espacios libres: «¿Tienes una noticia? Repórtala al WhatsApp…», «Anuncia con
+    nosotros», «Envía tu foto» o la **imagen** de un anuncio. En la ventana *📢 Avisos* se crean y
+    editan (título, mensaje, teléfono, icono o imagen) con vista previa; *Número para todos* pone tu
+    número en todos. Los marcados *automático* rellenan solos los espacios libres; con clic en un
+    espacio se elige *Poner una noticia* o *Poner un aviso*, y con clic en un aviso se cambia o se
+    quita. Un aviso de texto sin teléfono no se imprime. Se guardan en `data/avisos.json`;
   - clic derecho → **Mover a la página…** fija en qué página va una noticia (y *Dejar que se ubique
     sola* lo deshace);
   - clic en una caja **Datos clave**: se editan los datos de las noticias que la forman (uno por
