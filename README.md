@@ -114,6 +114,16 @@ Cada llamada a Claude (tokens de entrada y salida, duración, errores) queda en 
   (*Elegir archivo…*) o *Sin foto*. La plantilla no cambia, solo el contenido.
 - **👁 Vista previa** arma el periódico en `data/vista_previa.pdf` sin publicar nada.
 - **📰 Generar periódico** lo genera de verdad y marca esas noticias como publicadas.
+- **Pestaña Portada**: 6 lugares (principal, lateral, destacada y tres abajo). En cada uno eliges la
+  noticia, su foto (*Cambiar foto…*, *Otra foto de la noticia*, *Sin foto*) y los textos de portada.
+  Avisa si la foto es pequeña para ese lugar (se vería borrosa). *Titulares con Claude* escribe los
+  que dejes vacíos; *Elegir automáticamente* vuelve a la selección por importancia y foto.
+- Mientras corre una revisión o un análisis aparece una franja amarilla con el progreso; cada
+  acción (incluir, excluir, guardar) muestra un aviso abajo a la derecha. Una noticia ya publicada
+  se puede volver a incluir (con *Mostrar: Todas* y clic en su columna *¿Va?*).
+
+Tipografías de la portada: Alfa Slab One (titulares) y Fira Sans Condensed (antetítulos, puntos y
+etiquetas); cada tema tiene su color.
 
 **Dashboard**: tarjetas por ámbito con contadores (clic para filtrar), chips por tema, periodo
 (hoy / 48 h / 7 días / todo), filtro de combinadas (◆ = 2 o más medios). Al seleccionar una

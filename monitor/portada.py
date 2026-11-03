@@ -1,15 +1,97 @@
-"""Portada del boletín al estilo de un diario: cabezal con logo, nota destacada arriba a la derecha,
-franja de fecha, banda "Hoy en esta edición", nota principal con titular gigante, nota lateral y
-tres notas abajo. Cada nota lleva su etiqueta amarilla con la página donde se desarrolla."""
+"""Portada del periódico, estilo diario regional impreso.
+
+Bloques: cabezal azul con el logo en blanco, nota destacada (arriba a la derecha), franja de fecha,
+banda "Hoy en Puno", nota lateral, nota principal y tres notas abajo. En cada bloque la foto ocupa
+todo el espacio y el titular va encima, con borde blanco para que se lea sobre la imagen.
+
+Tipografías: Alfa Slab One (titulares de portada, muy pesada) + Fira Sans Condensed (antetítulos,
+puntos clave y etiquetas). Cada tema tiene su color (antetítulo y primera línea del titular).
+
+Qué noticia va en cada lugar se puede fijar a mano en la pestaña Portada (data/portada.json);
+lo que no se fija se elige solo, por importancia y por tener foto.
+"""
 import json
 import logging
+import unicodedata
 
+from PIL import Image
 from reportlab.lib import colors
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfbase import pdfmetrics
 
-log = logging.getLogger("monitor")
+from .config import BASE_DIR
 
+log = logging.getLogger("monitor")
+PORTADA_PATH = BASE_DIR / "data" / "portada.json"
+LUGARES = [("principal", "Principal"), ("lateral", "Lateral izquierda"), ("destacada", "Destacada (arriba)"),
+           ("abajo1", "Abajo 1"), ("abajo2", "Abajo 2"), ("abajo3", "Abajo 3")]
+# ancho aproximado (pt) con que se imprime la foto de cada lugar, para avisar si es chica
+ANCHO_LUGAR = {"principal": 390, "lateral": 170, "destacada": 172, "abajo1": 180, "abajo2": 180, "abajo3": 180}
+
+HEAVY, FC_M, FC_SB, FC_B, FC_XB, FC_XBI = "Heavy", "FC-M", "FC-SB", "FC-B", "FC-XB", "FC-XBI"
+COLOR_TEMA = {"politica": "#043F9B", "seguridad": "#C62828", "economia": "#2E7D32", "educacion": "#6A1B9A",
+              "salud": "#00838F", "sociedad": "#D84315", "cultura": "#AD1457", "deportes": "#1565C0",
+              "medio": "#2E7D32", "otros": "#37474F"}
+
+
+def color_hex(tema: str) -> str:
+    t = unicodedata.normalize("NFKD", tema or "").encode("ascii", "ignore").decode().lower()
+    for k, v in COLOR_TEMA.items():
+        if t.startswith(k):
+            return v
+    return "#043F9B"
+
+
+def color_tema(tema: str):
+    return colors.HexColor(color_hex(tema))
+
+
+# ------------------------------------------------------------------ lugares fijados a mano
+def leer_lugares() -> dict:
+    try:
+        return {k: int(v) for k, v in json.loads(PORTADA_PATH.read_text(encoding="utf-8")).items() if v}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def guardar_lugares(d: dict) -> None:
+    PORTADA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PORTADA_PATH.write_text(json.dumps({k: v for k, v in d.items() if v}, indent=2), encoding="utf-8")
+
+
+def calidad_foto(ruta, ancho_pt) -> tuple[int, int, bool]:
+    """(ancho_px, alto_px, suficiente). Suficiente = al menos ~110 ppp al tamaño impreso."""
+    try:
+        with Image.open(ruta) as im:
+            w, h = im.size
+    except Exception:  # noqa: BLE001
+        return 0, 0, False
+    return w, h, w >= ancho_pt * 1.5
+
+
+def _peso(a):
+    return a["n_medios"] * 300 + min(a["palabras"], 400) + (100 if a["ambito"] in ("DISTRITAL", "LOCAL", "REGIONAL") else 0)
+
+
+def elegir(arts) -> dict:
+    """{lugar: art} respetando lo fijado a mano; el resto por peso (primero las que tienen foto)."""
+    por_id = {a["gid"]: a for a in arts}
+    fijados = leer_lugares()
+    out, usados = {}, set()
+    for lugar, _ in LUGARES:
+        gid = fijados.get(lugar)
+        if gid in por_id and gid not in usados:
+            out[lugar] = por_id[gid]
+            usados.add(gid)
+    rank = sorted(arts, key=lambda a: (0 if a["img"] else 1, -_peso(a)))
+    libres = [a for a in rank if a["gid"] not in usados]
+    for lugar, _ in LUGARES:
+        if lugar not in out and libres:
+            out[lugar] = libres.pop(0)
+    return out
+
+
+# ------------------------------------------------------------------ textos (Claude)
 SYS_PORTADA = """Eres el editor de portada de "Altiplano al Día", diario de Puno (Perú).
 Para cada noticia escribe textos de portada, fieles a los hechos, sin inventar nada y SIN nombrar
 nunca al medio que difundió la información:
@@ -21,30 +103,29 @@ nunca al medio que difundió la información:
 Responde SOLO JSON: {"noticias":[{"id":"n1","portada":"…","ante":"…","puntos":["…","…"]}]}"""
 
 
-def textos_portada(cfg, arts):
-    """Una sola llamada a Claude para los titulares de portada. Si falla, usa los de la nota."""
+def textos_portada(cfg, arts, principal_gid=None, forzar=False):
+    """Titulares de portada. Respeta los escritos a mano; los que faltan los pide a Claude en una
+    sola llamada y los guarda en la nota (así la vista previa y el periódico final coinciden)."""
+    from . import storage
     out = {a["gid"]: {"portada": a["titular"], "ante": a["ante"].capitalize(), "puntos": []} for a in arts}
-    principal_gid = arts[0]["gid"] if arts else None
-    # textos de portada escritos o corregidos a mano en el editor: se respetan
     for a in arts:
         n = a["nota"]
-        if n.get("PORTADA_TITULAR"):
+        if n.get("PORTADA_TITULAR") and not forzar:
             out[a["gid"]] = {"portada": n["PORTADA_TITULAR"], "ante": n.get("PORTADA_ANTE") or out[a["gid"]]["ante"],
                              "puntos": [x for x in (n.get("PORTADA_PUNTOS") or []) if x]}
-    arts = [a for a in arts if not a["nota"].get("PORTADA_TITULAR")]
-    if not arts:
+    faltan = [a for a in arts if forzar or not a["nota"].get("PORTADA_TITULAR")]
+    if not faltan:
         return out
     try:
         from .analisis import claude_json
         from .config import get_api_key
         if not get_api_key("claude"):
             return out
-        mapa = {f"n{i + 1}": a for i, a in enumerate(arts)}
+        mapa = {f"n{i + 1}": a for i, a in enumerate(faltan)}
         user = json.dumps({"noticias": [
             {"id": k, "principal": a["gid"] == principal_gid, "titular": a["titular"], "antetitulo": a["ante"],
-             "texto": " ".join(a["parrafos"])[:1800]} for i, (k, a) in enumerate(mapa.items())]},
-            ensure_ascii=False)
-        res = claude_json(cfg, SYS_PORTADA, user, f"portada[{len(arts)}]", 4000)
+             "texto": " ".join(a["parrafos"])[:1800]} for k, a in mapa.items()]}, ensure_ascii=False)
+        res = claude_json(cfg, SYS_PORTADA, user, f"portada[{len(faltan)}]", 4000)
         for it in res.get("noticias", []):
             a = mapa.get(str(it.get("id")))
             if a and it.get("portada"):
@@ -52,164 +133,176 @@ def textos_portada(cfg, arts):
                                  "puntos": [p for p in it.get("puntos") or [] if p][:3]}
                 nota = dict(a["nota"], PORTADA_TITULAR=out[a["gid"]]["portada"],
                             PORTADA_ANTE=out[a["gid"]]["ante"], PORTADA_PUNTOS=out[a["gid"]]["puntos"])
-                from . import storage
+                a["nota"] = nota
                 storage.actualizar_grupo(a["gid"], nota_json=nota)
     except Exception as e:  # noqa: BLE001
         log.warning("Portada sin textos de Claude: %s", e)
     return out
 
 
-def elegir(arts):
-    """Principal, lateral, destacada (arriba) y tres de abajo: primero las de más peso con foto."""
-    con_foto = [a for a in arts if a["img"]]
-    sin_foto = [a for a in arts if not a["img"]]
-    rank = sorted(con_foto, key=_peso, reverse=True) + sorted(sin_foto, key=_peso, reverse=True)
-    return rank[:6]
-
-
-def _peso(a):
-    return a["n_medios"] * 300 + min(a["palabras"], 400) + (100 if a["ambito"] in ("DISTRITAL", "LOCAL", "REGIONAL") else 0)
-
-
-# ------------------------------------------------------------------ dibujo
-def _ajustar(texto, font, ancho, alto, maxsize, minsize, maxlineas, interlinea=0.92):
+# ------------------------------------------------------------------ primitivas de dibujo
+def _ajustar(texto, font, ancho, alto, maxsize, minsize, maxlineas, interlinea=0.95):
     for size in range(int(maxsize), int(minsize) - 1, -1):
         lineas = simpleSplit(texto, font, size, ancho)
-        if len(lineas) <= maxlineas and len(lineas) * size * interlinea <= alto:
+        cabe = all(pdfmetrics.stringWidth(ln, font, size) <= ancho + 0.5 for ln in lineas)  # palabras largas
+        if cabe and len(lineas) <= maxlineas and len(lineas) * size * interlinea <= alto:
             return size, lineas
     return minsize, simpleSplit(texto, font, minsize, ancho)[:maxlineas]
 
 
 def _contorno(c, x, y, t, font, size, relleno, borde=colors.white, grosor=None, sombra=True):
-    """Texto con borde blanco (y sombra suave), legible sobre fotos, como en los diarios."""
-    grosor = grosor if grosor is not None else max(1.2, size * 0.09)
+    """Texto con borde (y sombra suave), legible encima de las fotos."""
+    grosor = grosor if grosor is not None else max(1.2, size * 0.11)
     c.saveState()
     if sombra:
-        c.setFillColor(colors.Color(0, 0, 0, alpha=0.28))
+        c.setFillColor(colors.Color(0, 0, 0, alpha=0.30))
         c.setFont(font, size)
-        c.drawString(x + size * 0.04, y - size * 0.05, t)
+        c.drawString(x + size * 0.045, y - size * 0.055, t)
         c.setFillAlpha(1)
-    to = c.beginText(x, y)
-    to.setFont(font, size)
-    to.setTextRenderMode(1)
-    c.setStrokeColor(borde)
-    c.setLineWidth(grosor)
-    c.setLineJoin(1)
     if grosor > 0:
+        to = c.beginText(x, y)
+        to.setFont(font, size)
+        to.setTextRenderMode(1)
+        c.setStrokeColor(borde)
+        c.setLineWidth(grosor)
+        c.setLineJoin(1)
         to.textOut(t)
-        to.setTextRenderMode(0)             # el modo 1 persiste en el PDF: se restaura aquí
+        to.setTextRenderMode(0)            # el modo 1 persiste en el PDF: se restaura aquí
         c.drawText(to)
-    relleno_txt = c.beginText(x, y)
-    relleno_txt.setFont(font, size)
-    relleno_txt.setTextRenderMode(0)        # vuelve a modo relleno (el modo 1 persiste)
+    tf = c.beginText(x, y)
+    tf.setFont(font, size)
     c.setFillColor(relleno)
-    relleno_txt.textOut(t)
-    c.drawText(relleno_txt)
+    tf.textOut(t)
+    c.drawText(tf)
+    c.restoreState()
+
+
+def _velo(c, x, y, w, h, hacia="abajo", a0=0.85, a1=0.0, color=colors.white, pasos=28):
+    """Degradado de transparencia (franjas) sobre la foto para que el titular se lea."""
+    if w <= 0 or h <= 0:
+        return
+    c.saveState()
+    for i in range(pasos):
+        a = a0 + (a1 - a0) * i / (pasos - 1)
+        c.setFillColor(color, alpha=max(0.0, a))
+        if hacia == "abajo":       # opaco arriba -> transparente abajo
+            c.rect(x, y + h - (i + 1) * h / pasos, w, h / pasos + 0.6, stroke=0, fill=1)
+        else:                      # opaco a la izquierda -> transparente a la derecha
+            c.rect(x + i * w / pasos, y, w / pasos + 0.6, h, stroke=0, fill=1)
     c.restoreState()
 
 
 def _etiqueta(c, x_der, y, pag, k):
-    """Etiqueta amarilla '<< PÁG. N' alineada a la derecha en x_der."""
     t = f"‹‹ PÁG. {pag}"
-    c.setFont("Narrow-B", 9.5)
-    w = pdfmetrics.stringWidth(t, "Narrow-B", 9.5) + 12
+    w = pdfmetrics.stringWidth(t, FC_XB, 10) + 12
     c.setFillColor(k["AMARILLO"])
-    c.rect(x_der - w, y, w, 15, stroke=0, fill=1)
+    c.rect(x_der - w, y, w, 16, stroke=0, fill=1)
     c.setFillColor(k["AZUL"])
-    c.drawString(x_der - w + 6, y + 4, t)
+    c.setFont(FC_XB, 10)
+    c.drawString(x_der - w + 6, y + 4.5, t)
 
 
 def _foto(c, a, x, y, w, h, k):
+    """La foto llena todo el bloque (recorte al centro). Sin foto: fondo del color del tema + icono."""
+    if w <= 2 or h <= 2:
+        return
     if a and a["img"]:
         c.drawImage(k["recorte"](a["img"], int(w), int(h)), x, y, w, h)
-    else:
-        c.setFillColor(colors.HexColor("#E7EEF9"))
-        c.rect(x, y, w, h, stroke=0, fill=1)
-        ico = k["icono"]("tema", a["tema"]) if a else None
-        if ico:
-            s = min(w, h) * 0.45
-            c.drawImage(ico, x + (w - s) / 2, y + (h - s) / 2, s, s, mask="auto")
+        return
+    c.setFillColor(color_tema(a["tema"] if a else ""))
+    c.rect(x, y, w, h, stroke=0, fill=1)
+    ico = k["icono"]("tema", a["tema"], True) if a else None
+    if ico:
+        s = min(w, h) * 0.5
+        c.saveState()
+        c.setFillAlpha(0.25)
+        c.drawImage(ico, x + w - s - 8, y + 8, s, s, mask="auto")
+        c.restoreState()
 
 
 def _link(c, a, rect):
     c.linkRect("", f"g{a['gid']}", rect, relative=0, thickness=0)
 
 
+def _lineas_balanceadas(texto, font, ancho, maxsize):
+    """Parte el titular en 2 líneas parejas y calcula el tamaño para llenar el ancho."""
+    palabras = texto.split()
+    if len(palabras) < 2:
+        size = min(maxsize, ancho / max(1, pdfmetrics.stringWidth(texto, font, 10)) * 10)
+        return size, [texto]
+    mejor = min(((" ".join(palabras[:i]), " ".join(palabras[i:])) for i in range(1, len(palabras))),
+                key=lambda ab: max(pdfmetrics.stringWidth(ab[0], font, 10), pdfmetrics.stringWidth(ab[1], font, 10)))
+    ancho10 = max(pdfmetrics.stringWidth(x, font, 10) for x in mejor)
+    return min(maxsize, ancho / ancho10 * 10 * 0.98), list(mejor)
+
+
+# ------------------------------------------------------------------ portada
 def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
-    """k: dict con colores y helpers de consolidado (AZUL, AMARILLO, NEGRO, recorte, icono,
-    logo, fecha_larga, x)."""
-    AZUL, AMARILLO, NEGRO = k["AZUL"], k["AMARILLO"], k["NEGRO"]
+    AZUL, AMARILLO, NEGRO = k["AZUL"], k["AMARILLO"], colors.HexColor("#111111")
+    ROJO = colors.HexColor("#C62828")
     W, H = k["W"], k["H"]
     M = 20
     sel = elegir(arts_todos)
     if not sel:
         return
-    tx = textos_portada(cfg, sel)
+    principal = sel.get("principal")
+    tx = textos_portada(cfg, list(sel.values()), principal["gid"] if principal else None)
     pag = lambda a: paginas_de.get(a["gid"], "—")  # noqa: E731
-    principal = sel[0]
-    lateral = sel[1] if len(sel) > 1 else None
-    destacada = sel[2] if len(sel) > 2 else None
-    abajo = sel[3:6]
+    plano = k["plano"]
 
-    # ---------------- cabezal
-    top = H - 22
-    cab_w, cab_h = 372, 118
-    c.setFillColor(colors.white)
-    c.rect(M, top - cab_h, cab_w, cab_h, stroke=0, fill=1)
-    lw = cab_w - 40
-    lh = lw * 297 / 999
-    c.drawImage(k["logo"](), M + 4, top - 4 - lh, lw, lh, mask="auto")
+    # ---------------- cabezal azul con el logo en blanco
+    top = H - 20
+    cab_w, cab_h = 374, 124
     c.setFillColor(AZUL)
-    c.setFont("Slab", 11)
-    c.drawString(M + 6, top - cab_h + 6, "Noticias de Puno y la región")
-    c.setStrokeColor(AZUL)
-    c.setLineWidth(3)
-    c.line(M, top - cab_h, M + cab_w, top - cab_h)
+    c.rect(M, top - cab_h, cab_w, cab_h, stroke=0, fill=1)
+    lw = cab_w - 30
+    lh = lw * 297 / 999
+    c.drawImage(k["logo_blanco"](), M + 12, top - 8 - lh, lw, lh, mask="auto")
+    c.setFillColor(AMARILLO)
+    c.setFont(FC_B, 11)
+    c.drawString(M + 14, top - cab_h + 8, "NOTICIAS DE PUNO Y LA REGIÓN")
 
-    # franja de fecha
-    fy = top - cab_h - 16
+    fy = top - cab_h - 15
     c.setFillColor(NEGRO)
-    c.setFont("Narrow", 10.5)
+    c.setFont(FC_M, 10.5)
     partes = [k["fecha_larga"](ahora), f"Boletín N° {numero}", f"Edición de las {ahora:%H:%M} h"]
-    xs = [M, M + 150, M + 252]
-    for i, (p, xx) in enumerate(zip(partes, xs)):
-        c.drawString(xx + (6 if i else 0), fy, p)
+    for i, (p, xx) in enumerate(zip(partes, (M, M + 154, M + 258))):
+        c.drawString(xx + (7 if i else 0), fy, p)
         if i:
-            c.setLineWidth(0.8)
             c.setStrokeColor(NEGRO)
+            c.setLineWidth(0.9)
             c.line(xx, fy - 3, xx, fy + 10)
     c.setStrokeColor(AZUL)
-    c.setLineWidth(2)
-    c.line(M, fy - 8, M + cab_w, fy - 8)
+    c.setLineWidth(2.5)
+    c.line(M, fy - 7, M + cab_w, fy - 7)
 
-    # nota destacada (arriba a la derecha)
+    # ---------------- destacada (arriba a la derecha): foto a todo el bloque, titular encima
     dx0, dx1 = M + cab_w + 12, W - M
-    if destacada:
-        t = tx[destacada["gid"]]
-        c.setFillColor(AZUL)
-        ante = simpleSplit(k["plano"](t["ante"]), "Narrow-B", 10.5, dx1 - dx0)[:2]
-        yy = top - 9
-        for ln in ante:
-            c.setFont("Narrow-B", 10.5)
+    a = sel.get("destacada")
+    if a:
+        t = tx[a["gid"]]
+        c.setFillColor(color_tema(a["tema"]))
+        yy = top - 10
+        for ln in simpleSplit(plano(t["ante"]), FC_SB, 11, dx1 - dx0)[:2]:
+            c.setFont(FC_SB, 11)
             c.drawString(dx0, yy, ln)
-            yy -= 11.5
-        fb = fy - 8           # base de la caja de foto
-        ftop = yy - 2
-        _foto(c, destacada, dx0, fb, dx1 - dx0, ftop - fb, k)
-        size, lineas = _ajustar(k["plano"](t["portada"]).upper(), "Slab", (dx1 - dx0) * 0.62,
-                                ftop - fb - 26, 19, 11, 5, 1.0)
-        y2 = ftop - size * 0.95 - 4
+            yy -= 12
+        fb, ft = fy - 7, yy - 1
+        _foto(c, a, dx0, fb, dx1 - dx0, ft - fb, k)
+        _velo(c, dx0, fb, dx1 - dx0, ft - fb, "derecha", 0.75, 0.0)
+        size, lineas = _ajustar(plano(t["portada"]).upper(), HEAVY, (dx1 - dx0) * 0.8, ft - fb - 26, 17, 9, 5, 1.05)
+        y2 = ft - size - 4
         for ln in lineas:
-            _contorno(c, dx0 + 5, y2, ln, "Slab", size, NEGRO)
-            y2 -= size * 1.0
-        _etiqueta(c, dx1, fb + 2, pag(destacada), k)
-        _link(c, destacada, (dx0, fb, dx1, top))
+            _contorno(c, dx0 + 5, y2, ln, HEAVY, size, NEGRO)
+            y2 -= size * 1.05
+        _etiqueta(c, dx1, fb + 3, pag(a), k)
+        _link(c, a, (dx0, fb, dx1, top))
         c.setStrokeColor(NEGRO)
         c.setLineWidth(3)
-        c.line(dx0, fy - 8, dx1, fy - 8)
+        c.line(dx0, fb - 0.5, dx1, fb - 0.5)
 
-    # ---------------- banda "en esta edición"
-    by1 = fy - 18
+    # ---------------- banda "Hoy en Puno"
+    by1 = fy - 16
     bh = 50
     by0 = by1 - bh
     c.saveState()
@@ -221,42 +314,38 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
     c.setStrokeColor(colors.white)
     c.setLineWidth(1.2)
     c.roundRect(M + 4, by0 + 4, W - 2 * M - 8, bh - 8, 3, stroke=1, fill=0)
-    # cinta amarilla inclinada
     c.saveState()
-    c.translate(M + 18, by0 + 10)
+    c.translate(M + 16, by0 + 9)
     c.rotate(7)
-    c.setFillColor(AMARILLO)
-    c.rect(0, 0, 118, 28, stroke=0, fill=1)
-    c.setFillColor(AZUL)
-    c.setFont("Slab", 13)
-    c.drawCentredString(59, 9, "HOY EN PUNO")
-    c.restoreState()
-    n_tot = len(arts_todos)
+    c.setFillColor(ROJO)
+    c.rect(0, 0, 124, 30, stroke=0, fill=1)
     c.setFillColor(colors.white)
-    c.setFont("Slab", 19)
-    titulo = f"{n_tot} NOTICIAS "
-    c.drawString(M + 160, by0 + 27, titulo)
+    c.setFont(HEAVY, 13)
+    c.drawCentredString(62, 10, "HOY EN PUNO")
+    c.restoreState()
+    c.setFont(HEAVY, 19)
+    tit = f"{len(arts_todos)} NOTICIAS "
+    c.setFillColor(colors.white)
+    c.drawString(M + 160, by0 + 26, tit)
     c.setFillColor(AMARILLO)
-    c.drawString(M + 160 + pdfmetrics.stringWidth(titulo, "Slab", 19), by0 + 27, "AL DÍA")
-    # conteo por ámbito con iconos
+    c.drawString(M + 160 + pdfmetrics.stringWidth(tit, HEAVY, 19), by0 + 26, "AL DÍA")
     xx = M + 160
     for amb in cfg["ambitos"]:
-        n = sum(1 for a in arts_todos if a["ambito"] == amb)
+        n = sum(1 for x in arts_todos if x["ambito"] == amb)
         if not n:
             continue
         ico = k["icono"]("ambito", amb, True)
         if ico:
             c.drawImage(ico, xx, by0 + 8, 13, 13, mask="auto")
         c.setFillColor(colors.white)
-        c.setFont("Narrow-B", 9.5)
+        c.setFont(FC_SB, 10)
         lab = f"{amb.title()} {n}"
         c.drawString(xx + 15, by0 + 11, lab)
-        xx += 15 + pdfmetrics.stringWidth(lab, "Narrow-B", 9.5) + 12
+        xx += 15 + pdfmetrics.stringWidth(lab, FC_SB, 10) + 12
 
     # ---------------- zona media
-    mz1 = by0 - 12
-    mz0 = 205
-    lat_w = 168
+    mz1, mz0 = by0 - 12, 205
+    lat_w = 170
     lx0, lx1 = M, M + lat_w
     rx0, rx1 = lx1 + 14, W - M
     c.setStrokeColor(NEGRO)
@@ -264,109 +353,103 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
     c.line(lx1 + 5, mz0, lx1 + 5, mz1)
     c.line(lx1 + 8, mz0, lx1 + 8, mz1)
 
-    if lateral:
-        t = tx[lateral["gid"]]
-        yy = mz1 - 10
-        c.setFillColor(AZUL)
-        for ln in simpleSplit(k["plano"](t["ante"]), "Narrow-B", 11.5, lat_w)[:4]:
-            c.setFont("Narrow-B", 11.5)
+    a = sel.get("lateral")
+    if a:
+        t = tx[a["gid"]]
+        yy = mz1 - 11
+        c.setFillColor(color_tema(a["tema"]))
+        for ln in simpleSplit(plano(t["ante"]), FC_SB, 12, lat_w)[:4]:
+            c.setFont(FC_SB, 12)
             c.drawString(lx0, yy, ln)
-            yy -= 12.5
-        yy -= 4
-        size, lineas = _ajustar(k["plano"](t["portada"]).upper(), "Slab", lat_w, 150, 30, 15, 5, 0.95)
+            yy -= 13
+        yy -= 3
+        size, lineas = _ajustar(plano(t["portada"]).upper(), HEAVY, lat_w, 170, 30, 13, 6, 1.0)
         for ln in lineas:
-            yy -= size * 0.88
+            yy -= size * 0.9
             c.setFillColor(NEGRO)
-            c.setFont("Slab", size)
+            c.setFont(HEAVY, size)
             c.drawString(lx0, yy, ln)
-            yy -= size * 0.1
-        yy -= 8
-        _foto(c, lateral, lx0, mz0, lat_w, yy - mz0, k)
-        _etiqueta(c, lx0 + 62, mz0 + 2, pag(lateral), k)
-        _link(c, lateral, (lx0, mz0, lx1, mz1))
+            yy -= size * 0.12
+        yy -= 7
+        _foto(c, a, lx0, mz0, lat_w, yy - mz0, k)
+        _etiqueta(c, lx0 + 66, mz0 + 3, pag(a), k)
+        _link(c, a, (lx0, mz0, lx1, mz1))
 
-    # principal
-    t = tx[principal["gid"]]
-    yy = mz1 - 4
-    ante = k["plano"](t["ante"]).upper()
-    size_a, lin_a = _ajustar(ante, "Narrow-B", rx1 - rx0, 34, 16, 10, 2, 1.0)
-    for ln in lin_a:
-        yy -= size_a * 0.9
-        _contorno(c, rx0, yy, ln, "Narrow-B", size_a, NEGRO, grosor=0, sombra=False)
-        yy -= size_a * 0.15
-    yy -= 4
-    tit = k["plano"](t["portada"]).upper()
-    palabras = tit.split()
-    # dos líneas equilibradas: la 1.ª en azul, la 2.ª en negro, a todo el ancho
-    if len(palabras) >= 2:
-        mejor = min(((" ".join(palabras[:i]), " ".join(palabras[i:])) for i in range(1, len(palabras))),
-                    key=lambda ab: max(pdfmetrics.stringWidth(ab[0], "Slab", 10), pdfmetrics.stringWidth(ab[1], "Slab", 10)))
-        ancho10 = max(pdfmetrics.stringWidth(x, "Slab", 10) for x in mejor)
-        size = min(70, (rx1 - rx0) / ancho10 * 10 * 0.98)
-        lineas = list(mejor)
-    else:
-        size, lineas = _ajustar(tit, "Slab", rx1 - rx0, 140, 70, 24, 2)
-    for i, ln in enumerate(lineas):
-        yy -= size * 0.82
-        _contorno(c, rx0, yy, ln, "Slab", size, AZUL if i == 0 else NEGRO)
-        yy -= size * 0.12
-    foto_top = yy - 4
-    _foto(c, principal, rx0, mz0, rx1 - rx0, foto_top - mz0, k)
-    # puntos clave sobre la foto
-    puntos = [k["plano"](p) for p in t["puntos"]][:2] or [k["plano"](principal["nota"].get("BAJADA") or "")]
-    py = mz0 + 26
-    bloques = []
-    for ptxt in reversed([p for p in puntos if p]):
-        lineas_p = simpleSplit(ptxt, "Narrow-B", 13, (rx1 - rx0) * 0.62)[:3]
-        bloques.append(lineas_p)
-    for lineas_p in bloques:
-        for j, ln in enumerate(reversed(lineas_p)):
-            _contorno(c, rx0 + 22, py, ln, "Narrow-B", 13, NEGRO, grosor=2.6, sombra=False)
-            if j == len(lineas_p) - 1:
-                c.setFillColor(AMARILLO)
-                c.setStrokeColor(AZUL)
-                c.setLineWidth(1.5)
-                c.circle(rx0 + 12, py + 4.5, 5.5, stroke=1, fill=1)
-            py += 14.5
-        py += 6
-    _etiqueta(c, rx1, mz0 + 2, pag(principal), k)
-    _link(c, principal, (rx0, mz0, rx1, mz1))
+    # principal: antetítulo arriba y la foto ocupa todo el resto, con el titular encima
+    a = principal
+    if a:
+        t = tx[a["gid"]]
+        yy = mz1
+        size_a, lin_a = _ajustar(plano(t["ante"]).upper(), FC_XB, rx1 - rx0, 36, 17, 10, 2, 1.05)
+        for ln in lin_a:
+            yy -= size_a * 0.92
+            c.setFillColor(NEGRO)
+            c.setFont(FC_XB, size_a)
+            c.drawString(rx0, yy, ln)
+            yy -= size_a * 0.14
+        foto_top = yy - 5
+        _foto(c, a, rx0, mz0, rx1 - rx0, foto_top - mz0, k)
+        size, lineas = _lineas_balanceadas(plano(t["portada"]).upper(), HEAVY, rx1 - rx0 - 8, 64)
+        alto_tit = len(lineas) * size * 0.98 + 10
+        _velo(c, rx0, foto_top - alto_tit * 1.25, rx1 - rx0, alto_tit * 1.25, "abajo", 0.8, 0.0)
+        y2 = foto_top - 4
+        for i, ln in enumerate(lineas):
+            y2 -= size * 0.86
+            _contorno(c, rx0 + 4, y2, ln, HEAVY, size, color_tema(a["tema"]) if i == 0 else NEGRO,
+                      grosor=size * 0.1)
+            y2 -= size * 0.12
+        puntos = [plano(p) for p in t["puntos"]][:2] or [plano(a["nota"].get("BAJADA") or "")]
+        py = mz0 + 26
+        for ptxt in reversed([p for p in puntos if p]):
+            fs, lineas_p = _ajustar(ptxt, FC_XBI, (rx1 - rx0) * 0.62, 60, 13.5, 10, 4, 1.1)
+            for j, ln in enumerate(reversed(lineas_p)):
+                _contorno(c, rx0 + 24, py, ln, FC_XBI, fs, NEGRO, grosor=3, sombra=False)
+                if j == len(lineas_p) - 1:
+                    c.setFillColor(ROJO)
+                    c.setStrokeColor(colors.white)
+                    c.setLineWidth(1.5)
+                    c.circle(rx0 + 13, py + 4.5, 6, stroke=1, fill=1)
+                py += fs * 1.1
+            py += 6
+        _etiqueta(c, rx1, mz0 + 3, pag(a), k)
+        _link(c, a, (rx0, mz0, rx1, mz1))
 
-    # ---------------- fila inferior
+    # ---------------- fila inferior: la foto llena cada tarjeta y el titular va encima, a la izquierda
     c.setStrokeColor(AMARILLO)
     c.setLineWidth(4)
     c.line(M, mz0 - 9, W - M, mz0 - 9)
     c.setStrokeColor(AZUL)
     c.setLineWidth(1)
     c.line(M, mz0 - 12.5, W - M, mz0 - 12.5)
+    abajo = [sel[x] for x in ("abajo1", "abajo2", "abajo3") if sel.get(x)]
     if abajo:
         n = len(abajo)
         gap = 12
         cw = (W - 2 * M - gap * (n - 1)) / n
-        y1, y0 = mz0 - 22, 34
+        y1, y0 = mz0 - 21, 34
         for i, a in enumerate(abajo):
             t = tx[a["gid"]]
             x0 = M + i * (cw + gap)
             if i:
-                c.setStrokeColor(AZUL)
-                c.setLineWidth(0.8)
+                c.setStrokeColor(ROJO)
+                c.setLineWidth(0.9)
                 c.line(x0 - gap / 2, y0, x0 - gap / 2, y1)
-            c.setFillColor(AZUL)
-            c.setFont("Narrow-B", 9.5)
-            ante = simpleSplit(k["plano"](t["ante"]), "Narrow-B", 9.5, cw)[:2]
+            c.setFillColor(color_tema(a["tema"]))
+            c.setFont(FC_SB, 10.5)
+            ante = simpleSplit(plano(t["ante"]), FC_SB, 10.5, cw)[:2]
             for j, ln in enumerate(ante):
-                c.drawString(x0, y1 - 9 - j * 10.5, ln)
-            ft = y1 - 15 - 10.5 * max(0, len(ante) - 1)
-            _foto(c, a, x0 + cw * 0.42, y0, cw * 0.58, ft - y0, k)
-            size, lineas = _ajustar(k["plano"](t["portada"]).upper(), "Slab", cw * 0.92, ft - y0 - 22, 17, 10, 4, 1.0)
-            yy = ft - size * 0.95
+                c.drawString(x0, y1 - 9 - j * 11, ln)
+            ft = y1 - 15 - 11 * max(0, len(ante) - 1)
+            _foto(c, a, x0, y0, cw, ft - y0, k)
+            _velo(c, x0, y0, cw * 0.8, ft - y0, "derecha", 0.85, 0.0)
+            size, lineas = _ajustar(plano(t["portada"]).upper(), HEAVY, cw * 0.82, ft - y0 - 24, 17, 9, 4, 1.05)
+            yy = ft - size - 3
             for ln in lineas:
-                _contorno(c, x0, yy, ln, "Slab", size, NEGRO)
-                yy -= size
-            _etiqueta(c, x0 + cw, y0 + 2, pag(a), k)
+                _contorno(c, x0 + 3, yy, ln, HEAVY, size, NEGRO)
+                yy -= size * 1.05
+            _etiqueta(c, x0 + cw, y0 + 3, pag(a), k)
             _link(c, a, (x0, y0, x0 + cw, y1))
-    # pie
-    c.setFont("Narrow", 7)
+    c.setFont(FC_M, 7.5)
     c.setFillColor(colors.HexColor("#555555"))
     c.drawString(M, 20, "Altiplano al Día · boletín elaborado a partir del monitoreo de medios de la región")
     c.drawRightString(W - M, 20, f"Boletín N° {numero} · {ahora:%d/%m/%Y %H:%M}")

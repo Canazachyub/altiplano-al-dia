@@ -13,6 +13,7 @@ from .analisis import ciclo_fase2, fase2_lock
 from .config import (BASE_DIR, EXCEL_PATH, PROFILE_DIR, get_api_key, load_config, nombre_medio,
                      normalize_page_url, page_slug, save_config, set_api_key)
 from .editor import EditorNota
+from .gui_portada import PortadaTab
 from .scraper import interactive_login
 from .worker import browser_lock, procesar_post, revisar
 
@@ -118,8 +119,11 @@ class App(tk.Tk):
         self.nb.pack(fill="both", expand=True, padx=12, pady=(8, 0))
         self._build_bandeja()
         self._build_dashboard()
+        self.portada_tab = PortadaTab(self.nb, self)
+        self.nb.add(self.portada_tab, text="  Portada  ")
         self._build_config()
         self._build_statusbar()
+        self.nb.bind("<<NotebookTabChanged>>", self._tab_cambiada)
 
         self._load_pages()
         self._load_posts()
@@ -180,6 +184,17 @@ class App(tk.Tk):
         self.btn_fase2.pack(side="left", padx=4)
         self.btn_now = ttk.Button(right, text="▶  Revisar ahora", style="Accent.TButton", command=self.check_now)
         self.btn_now.pack(side="left", padx=4)
+
+        # franja visible mientras hay una operación en curso
+        self.busy_bar = tk.Frame(self, bg="#FFF4CC", highlightthickness=1, highlightbackground="#F2D27A")
+        self.busy_txt = tk.Label(self.busy_bar, text="", bg="#FFF4CC", fg="#6B4E00", font=(F, 10, "bold"))
+        self.busy_txt.pack(side="left", padx=(14, 10), pady=6)
+        self.busy_prog = ttk.Progressbar(self.busy_bar, mode="indeterminate", length=220)
+        self.busy_prog.pack(side="left", pady=6)
+        tk.Label(self.busy_bar, text="Puedes seguir revisando y editando noticias mientras tanto; "
+                                     "la vista previa y el periódico esperan a que termine.",
+                 bg="#FFF4CC", fg="#6B4E00", font=(F, 9)).pack(side="left", padx=12)
+        self._toast = None
 
     def _build_statusbar(self):
         bar = tk.Frame(self, bg="#E4E8F0", height=26)
@@ -283,6 +298,12 @@ class App(tk.Tk):
         self.d_tema = ttk.Combobox(fb, state="readonly", width=20, values=["Todos"] + self.cfg["temas"])
         self.d_tema.set("Todos")
         self.d_tema.pack(side="left", padx=(4, 12))
+        ttk.Label(fb, text="Mostrar:").pack(side="left")
+        self.d_mostrar = ttk.Combobox(fb, state="readonly", width=22,
+                                      values=["Pendientes de publicar", "Todas"])
+        self.d_mostrar.set("Pendientes de publicar")
+        self.d_mostrar.pack(side="left", padx=(4, 12))
+        self.d_mostrar.bind("<<ComboboxSelected>>", lambda e: self._refresh_dashboard())
         self.d_multi = tk.BooleanVar(value=False)
         ttk.Checkbutton(fb, text="Solo combinadas (2+ medios)", variable=self.d_multi,
                         command=self._refresh_dashboard).pack(side="left")
@@ -317,7 +338,7 @@ class App(tk.Tk):
         pw.add(left, weight=3)
         cols = ("va", "marca", "hora", "titular", "medios", "n", "tema", "pdf")
         self.gtree = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse")
-        for c, t, w, anc in (("va", "Va", 34, "center"), ("marca", "", 28, "center"), ("hora", "Hora", 78, "w"),
+        for c, t, w, anc in (("va", "¿Va?", 74, "center"), ("marca", "", 28, "center"), ("hora", "Hora", 78, "w"),
                              ("titular", "Titular", 300, "w"), ("medios", "Medios", 150, "w"),
                              ("n", "Fuentes", 56, "center"), ("tema", "Tema", 115, "w"),
                              ("pdf", "Boletín", 72, "w")):
@@ -333,6 +354,7 @@ class App(tk.Tk):
         self.gtree.bind("<Button-1>", self._click_va, add="+")
         self.gtree.bind("<Double-1>", lambda e: self._editar())
         self.gtree.tag_configure("fuera", foreground="#9CA3AF")
+        self.gtree.tag_configure("publicada", foreground="#6B7280")
 
         right = ttk.Frame(pw, padding=(10, 0, 0, 0))
         pw.add(right, weight=2)
@@ -561,6 +583,27 @@ class App(tk.Tk):
             b.state(["disabled"] if busy else ["!disabled"])
         self.chip.configure(text=f"● {texto or ('Trabajando…' if busy else 'En espera')}",
                             fg="#FFD27A" if busy else "#9FE2B0")
+        if busy:
+            self.busy_txt.configure(text=f"⏳ {texto or 'Trabajando…'}")
+            self.busy_bar.pack(fill="x", after=self.chip.master.master, padx=12, pady=(8, 0))
+            self.busy_prog.start(12)
+        else:
+            self.busy_prog.stop()
+            self.busy_bar.pack_forget()
+
+    def _aviso(self, texto, tipo="ok", ms=4500):
+        """Mensaje flotante abajo a la derecha (y en la barra de estado)."""
+        colores = {"ok": ("#E7F6EC", "#1E6B34", "✔"), "warn": ("#FFF4E5", "#8A5300", "⚠"),
+                   "error": ("#FDECEC", "#B3261E", "✖"), "info": ("#E8F0FE", "#1D4ED8", "ℹ")}
+        bg, fg, ico = colores.get(tipo, colores["info"])
+        self.status.set(texto)
+        if self._toast is not None:
+            self._toast.destroy()
+        t = tk.Label(self, text=f" {ico}  {texto} ", bg=bg, fg=fg, font=(F, 10, "bold"), padx=12, pady=8,
+                     highlightthickness=1, highlightbackground=fg, wraplength=520, justify="left")
+        t.place(relx=1.0, rely=1.0, x=-18, y=-36, anchor="se")
+        self._toast = t
+        self.after(ms, lambda: t.destroy() if self._toast is t else None)
 
     def _cfg_actual(self):
         cfg = load_config()
@@ -632,6 +675,8 @@ class App(tk.Tk):
                 ev, d = self.q.get_nowait()
                 if ev == "status":
                     self.status.set(d)
+                    if self.running:
+                        self.busy_txt.configure(text=f"⏳ {d}")
                 elif ev == "error":
                     self.last_error = d
                     self.status.set(f"Error: {d}")
@@ -844,10 +889,14 @@ class App(tk.Tk):
             pdf = {"publicado": f"N° {g['ultimo_pdf']}", "actualizacion": "Actualizar",
                    "nuevo": "Pendiente"}.get(g["estado_pdf"], g["estado_pdf"])
             pendiente = g["estado_pdf"] in ("nuevo", "actualizacion")
+            if self.d_mostrar.get() != "Todas" and not pendiente:
+                continue
             va_si = (g["en_periodico"] if g["en_periodico"] is not None else 1) == 1
             if pendiente and not va_si:
                 tags.append("fuera")
-            va = ("☑" if va_si else "☐") if pendiente else "—"
+            if not pendiente:
+                tags.append("publicada")
+            va = ("☑ Va" if va_si else "☐ No va") if pendiente else "Publicada"
             self.gtree.insert("", "end", iid=str(g["id"]), tags=tags, values=(
                 va, "◆" if multi else "", _fecha_corta(g["fecha_hecho"]), g["titular"], g["medios"],
                 g["n_fuentes"], g["tema"], pdf))
@@ -855,6 +904,10 @@ class App(tk.Tk):
             self.gtree.selection_set(sel[0])
         listos = storage.grupos_para_pdf()
         self.lbl_va.configure(text=f"{len(listos)} noticia(s) irán en el próximo periódico")
+        if not self.gtree.get_children() and self.d_mostrar.get() != "Todas":
+            self.gtree.insert("", "end", iid="vacio", values=(
+                "", "", "", "No hay noticias pendientes con estos filtros. Las ya publicadas se ven con "
+                "«Mostrar: Todas»; llegan noticias nuevas en cada revisión.", "", "", "", ""))
 
     def _chip(self, tema):
         self.d_tema.set(tema if self.d_tema.get() != tema else "Todos")
@@ -862,7 +915,7 @@ class App(tk.Tk):
 
     def _on_select_grupo(self, _e=None):
         s = self.gtree.selection()
-        if not s:
+        if not s or not s[0].isdigit():
             return
         gid = int(s[0])
         self.grupos_nuevos.discard(gid)
@@ -926,33 +979,61 @@ class App(tk.Tk):
     # ================================================================== periódico: selección y edición
     def _gid_sel(self):
         s = self.gtree.selection()
-        return int(s[0]) if s else None
+        return int(s[0]) if s and s[0].isdigit() else None
 
     def _click_va(self, e):
         if self.gtree.identify_region(e.x, e.y) != "cell" or self.gtree.identify_column(e.x) != "#1":
             return
         fila = self.gtree.identify_row(e.y)
-        if fila and self.gtree.set(fila, "va") in ("☑", "☐"):
-            storage.set_en_periodico([int(fila)], self.gtree.set(fila, "va") == "☐")
-            self._refresh_dashboard()
+        if fila and fila.isdigit():
+            self.after(10, lambda: self._cambiar_va(int(fila)))
 
     def _toggle_incluir(self):
         gid = self._gid_sel()
         if gid is None:
+            self._aviso("Selecciona una noticia en la tabla.", "warn")
             return
+        self._cambiar_va(gid)
+
+    def _cambiar_va(self, gid):
         g = storage.get_grupo(gid)
-        storage.set_en_periodico([gid], (g["en_periodico"] if g["en_periodico"] is not None else 1) == 0)
+        titular = (g["titular"] or "")[:60]
+        if g["estado_pdf"] not in ("nuevo", "actualizacion"):
+            if messagebox.askyesno("Noticia ya publicada",
+                                   f"«{titular}» ya salió en el boletín N° {g['ultimo_pdf']}.\n\n"
+                                   "¿Quieres ponerla otra vez en el próximo periódico?"):
+                storage.actualizar_grupo(gid, estado_pdf="nuevo")
+                storage.set_en_periodico([gid], True)
+                self._aviso(f"Volverá a salir: {titular}", "ok")
+            self._refresh_dashboard()
+            return
+        va = (g["en_periodico"] if g["en_periodico"] is not None else 1) == 1
+        storage.set_en_periodico([gid], not va)
+        self._aviso(("Excluida del periódico: " if va else "Incluida en el periódico: ") + titular,
+                    "warn" if va else "ok")
         self._refresh_dashboard()
 
     def _incluir_todas(self, valor):
-        """Aplica a las noticias que se ven ahora en la tabla (respeta los filtros)."""
-        storage.set_en_periodico([int(i) for i in self.gtree.get_children()], valor)
+        """Aplica a las noticias pendientes que se ven ahora en la tabla (respeta los filtros)."""
+        ids = []
+        for i in self.gtree.get_children():
+            if i.isdigit() and self.gtree.set(i, "va") != "Publicada":
+                ids.append(int(i))
+        if not ids:
+            self._aviso("No hay noticias pendientes en la tabla (las publicadas no cambian).", "warn")
+            return
+        storage.set_en_periodico(ids, valor)
+        self._aviso(f"{len(ids)} noticia(s) {'incluidas' if valor else 'excluidas'}.", "ok" if valor else "warn")
         self._refresh_dashboard()
+
+    def _tab_cambiada(self, _e=None):
+        if self.nb.select() == str(self.portada_tab):
+            self.portada_tab.recargar()
 
     def _editar(self):
         gid = self._gid_sel()
         if gid is None:
-            messagebox.showinfo("Editar nota", "Selecciona una noticia en la tabla.")
+            self._aviso("Selecciona una noticia en la tabla para editarla.", "warn")
             return
         EditorNota(self, gid, self._cfg_actual(),
                    on_save=lambda: (self._refresh_dashboard(), self._on_select_grupo()))
@@ -960,7 +1041,8 @@ class App(tk.Tk):
     def _generar_pdf(self, previa: bool):
         from .consolidado import generar_consolidado
         if self.running or fase2_lock.locked():
-            messagebox.showwarning("Periódico", "Espera a que termine la revisión o el análisis en curso.")
+            self._aviso("Hay una revisión o un análisis en curso (ver la franja amarilla). "
+                        "Espera a que termine para armar el periódico.", "warn", 6000)
             return
         n = len(storage.grupos_para_pdf())
         if not n:

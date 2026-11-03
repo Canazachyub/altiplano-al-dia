@@ -98,6 +98,8 @@ class EditorNota(tk.Toplevel):
         ttk.Label(der, text="Foto de la nota", font=(F, 11, "bold")).pack(anchor="w")
         self.lbl_foto = tk.Label(der, bg="#E7EEF9", width=PREVIEW[0], height=PREVIEW[1])
         self.lbl_foto.pack(anchor="w", pady=(4, 6))
+        self.lbl_calidad = tk.Label(der, text="", font=(F, 9, "bold"), bg="#F3F5F9", wraplength=330, justify="left")
+        self.lbl_calidad.pack(anchor="w", pady=(0, 6))
         bf = ttk.Frame(der)
         bf.pack(anchor="w")
         ttk.Button(bf, text="Elegir archivo…", command=self._elegir_archivo).pack(side="left")
@@ -159,6 +161,9 @@ class EditorNota(tk.Toplevel):
             b.bind("<Button-1>", lambda e, r=ruta: self._usar(r))
 
     def _mostrar_foto(self):
+        from .gui_portada import aviso_foto
+        texto, color = aviso_foto(self.foto, 300)
+        self.lbl_calidad.configure(text=texto, fg=color)
         if self.foto and Path(self.foto).exists():
             self.lbl_foto.configure(image=self._miniatura(self.foto, PREVIEW), text="", width=0, height=0)
         else:
@@ -176,11 +181,8 @@ class EditorNota(tk.Toplevel):
         if not ruta:
             return
         try:
-            im = Image.open(ruta).convert("RGB")
-            im.thumbnail((1800, 1800))
-            IMG_DIR.mkdir(parents=True, exist_ok=True)
-            destino = IMG_DIR / f"manual_g{self.gid}_{datetime.now():%Y%m%d%H%M%S}.jpg"
-            im.save(destino, "JPEG", quality=88)
+            from .gui_portada import importar_foto
+            destino = importar_foto(ruta, self.gid)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("Foto", f"No se pudo abrir la imagen:\n{e}", parent=self)
             return

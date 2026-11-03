@@ -70,7 +70,11 @@ def _fuentes():
                             ("Serif", "PT_Serif-Web-Regular.ttf"), ("Serif-B", "PT_Serif-Web-Bold.ttf"),
                             ("Serif-I", "PT_Serif-Web-Italic.ttf"),
                             ("Narrow", "PT_Sans-Narrow-Web-Regular.ttf"),
-                            ("Narrow-B", "PT_Sans-Narrow-Web-Bold.ttf")):
+                            ("Narrow-B", "PT_Sans-Narrow-Web-Bold.ttf"),
+                            ("Heavy", "AlfaSlabOne-Regular.ttf"),
+                            ("FC-M", "FiraSansCondensed-Medium.ttf"), ("FC-SB", "FiraSansCondensed-SemiBold.ttf"),
+                            ("FC-B", "FiraSansCondensed-Bold.ttf"), ("FC-XB", "FiraSansCondensed-ExtraBold.ttf"),
+                            ("FC-XBI", "FiraSansCondensed-ExtraBoldItalic.ttf")):
         pdfmetrics.registerFont(TTFont(nombre, str(d / archivo)))
     pdfmetrics.registerFontFamily("Serif", normal="Serif", bold="Serif-B", italic="Serif-I", boldItalic="Serif-B")
     pdfmetrics.registerFontFamily("Narrow", normal="Narrow", bold="Narrow-B", italic="Narrow", boldItalic="Narrow-B")
@@ -83,8 +87,8 @@ def _st():
         "body": ParagraphStyle("body", fontName="Serif", fontSize=9, leading=11, alignment=TA_JUSTIFY,
                                hyphenationLang="es", embeddedHyphenation=1, uriWasteReduce=0.3),
         "inter": ParagraphStyle("inter", fontName="Serif-B", fontSize=9, leading=11, spaceBefore=3),
-        "kicker": ParagraphStyle("kicker", fontName="Narrow-B", fontSize=11.5, leading=12.5, textColor=NEGRO),
-        "kicker_s": ParagraphStyle("kicker_s", fontName="Narrow-B", fontSize=9.5, leading=10.5, textColor=NEGRO),
+        "kicker": ParagraphStyle("kicker", fontName="FC-B", fontSize=11, leading=12.5, textColor=NEGRO),
+        "kicker_s": ParagraphStyle("kicker_s", fontName="FC-B", fontSize=9.2, leading=10.5, textColor=NEGRO),
         "caption": ParagraphStyle("caption", fontName="Narrow", fontSize=7.8, leading=9, textColor=colors.HexColor("#333333")),
         "byline": ParagraphStyle("byline", fontName="Serif-I", fontSize=7.5, leading=9, alignment=TA_RIGHT, textColor=NEGRO),
         "idx": ParagraphStyle("idx", fontName="Narrow", fontSize=8, leading=9.4, textColor=NEGRO),
@@ -272,8 +276,9 @@ def _layout(art, ancho, ncols, tipo, st, alto_cuerpo=None, foto_extra=0.0, secci
     if seccion and art["ambito"] != seccion:
         marca += f'<font color="#043F9B">{_x(art["ambito"])} · </font>'
     if art["ante"] or marca:
+        from .portada import color_hex
         ico = _img_tag(_icono("tema", art["tema"]), ks.fontSize + 1.5, -2.5)
-        k = Paragraph(ico + marca + _x(art["ante"]), ks)
+        k = Paragraph(ico + marca + f'<font color="{color_hex(art["tema"])}">{_x(art["ante"])}</font>', ks)
         _, hk = k.wrap(ancho, 200)
         ops.append(("flow", k, 0, d, hk))
         d += hk + 2
@@ -505,6 +510,10 @@ def _paginar(arts, st):
 # ------------------------------------------------------------------ cabecera, portada y pie
 def _logo():
     return ImageReader(str(ASSETS_DIR / "logo.png"))
+
+
+def _logo_blanco():
+    return ImageReader(str(ASSETS_DIR / "logo_blanco.png"))
 
 
 def _cabecera(c, pg, fecha_txt):
@@ -742,7 +751,7 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
     from . import portada
     portada.dibujar(c, cfg, arts, paginas_de, numero, ahora, {
         "AZUL": AZUL, "AZUL_CLARO": AZUL_CLARO, "AMARILLO": AMARILLO, "NEGRO": NEGRO, "W": W, "H": H,
-        "recorte": _recorte, "icono": _icono, "logo": _logo, "fecha_larga": _fecha_larga, "plano": _plano})
+        "recorte": _recorte, "icono": _icono, "logo": _logo, "logo_blanco": _logo_blanco, "fecha_larga": _fecha_larga, "plano": _plano})
     for pg in paginas:
         c.showPage()
         if pg.portada:
