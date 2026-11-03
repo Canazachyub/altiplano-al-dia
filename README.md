@@ -38,6 +38,12 @@ Necesita internet durante la instalación (unos 150 MB entre Python y las depend
 - **Páginas**: escribe la URL o el nombre (`radiopachamama`) y pulsa *Agregar*. *Activar/Pausar*
   la excluye de las revisiones sin borrarla (● activa, ○ pausada). Todo se guarda en `config.json`.
 - **Intervalo**: por defecto 30 min; cámbialo y pulsa *Aplicar*.
+- **Controlar la revisión** (botones de la cabecera):
+  - **▶ Revisar ahora**: revisa en ese momento.
+  - **■ Detener**: aparece mientras se revisa (también en la franja amarilla). Corta la revisión en
+    menos de un segundo y cierra el navegador; lo leído hasta ahí queda guardado.
+  - **⏸ Pausar automático / ▶ Reanudar automático**: apaga o prende la revisión cada N minutos. En
+    pausa solo se revisa al pulsar *Revisar ahora*. Se recuerda al cerrar la app.
 - **Bandeja**: las nuevas aparecen resaltadas en amarillo y con notificación de Windows.
   Doble clic abre el PDF. Al seleccionar: texto, *Abrir en Facebook*, *Abrir nota externa*,
   *Abrir PDF*, *Reprocesar IA* (por ejemplo, tras cambiar de proveedor).

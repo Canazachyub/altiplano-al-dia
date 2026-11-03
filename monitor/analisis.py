@@ -104,13 +104,15 @@ Para cada noticia nueva decide:
 Responde SOLO JSON: {"noticias":[{"id":"n1","grupo":12 | "A","ambito":"...","tema":"...","resumen":"...","es_noticia":true}]}"""
 
 
-def clasificar_y_agrupar(cfg: dict, emit=lambda *a: None) -> int:
+def clasificar_y_agrupar(cfg: dict, emit=lambda *a: None, cancelar=None) -> int:
     nuevos = storage.posts_sin_grupo()
     if not nuevos:
         return 0
     ambitos, temas = cfg["ambitos"], cfg["temas"]
     asignados = 0
     for i in range(0, len(nuevos), LOTE):
+        if cancelar and cancelar():
+            break
         lote = nuevos[i:i + LOTE]
         recientes = storage.grupos_recientes(cfg["ventana_cruce_horas"])
         emit("status", f"Claude: cruzando {len(lote)} noticias contra {len(recientes)} grupos recientes…")
@@ -204,9 +206,11 @@ def _nota_desde_fase1(post, cfg) -> dict | None:
     }
 
 
-def generar_notas(cfg: dict, emit=lambda *a: None) -> int:
+def generar_notas(cfg: dict, emit=lambda *a: None, cancelar=None) -> int:
     hechas = 0
     for g in storage.grupos_con_nota_pendiente():
+        if cancelar and cancelar():
+            break
         posts = storage.posts_de_grupo(g["id"])
         if not posts:
             continue
@@ -257,7 +261,7 @@ def generar_notas(cfg: dict, emit=lambda *a: None) -> int:
 
 
 # ------------------------------------------------------------------ ciclo completo
-def ciclo_fase2(cfg: dict, emit=lambda *a: None, forzar_pdf: bool = False) -> dict:
+def ciclo_fase2(cfg: dict, emit=lambda *a: None, forzar_pdf: bool = False, cancelar=None) -> dict:
     """Cruce -> clasificación -> notas -> Excel -> PDF consolidado. Devuelve un resumen."""
     from .consolidado import generar_consolidado
     from .excel import exportar_excel
@@ -269,15 +273,15 @@ def ciclo_fase2(cfg: dict, emit=lambda *a: None, forzar_pdf: bool = False) -> di
     try:
         storage.init_db()
         if get_api_key("claude"):
-            out["asignados"] = clasificar_y_agrupar(cfg, emit)
-            out["notas"] = generar_notas(cfg, emit)
+            out["asignados"] = clasificar_y_agrupar(cfg, emit, cancelar)
+            out["notas"] = generar_notas(cfg, emit, cancelar)
         else:
             emit("error", "Fase 2 omitida: falta la API key de Claude.")
         try:
             out["excel"] = str(exportar_excel(cfg))
         except Exception as e:  # noqa: BLE001
             emit("error", f"Excel: {e}")
-        if forzar_pdf or cfg.get("pdf_consolidado_auto", True):
+        if (forzar_pdf or cfg.get("pdf_consolidado_auto", True)) and not (cancelar and cancelar()):
             out["pdf"] = generar_consolidado(cfg)
             if out["pdf"]:
                 emit("consolidado", str(out["pdf"]))

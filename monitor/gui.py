@@ -15,7 +15,7 @@ from .config import (BASE_DIR, EXCEL_PATH, PROFILE_DIR, get_api_key, load_config
 from .editor import EditorNota
 from .gui_portada import PortadaTab
 from .scraper import interactive_login
-from .worker import browser_lock, procesar_post, revisar
+from .worker import browser_lock, detener, procesar_post, revisar
 
 try:
     from plyer import notification
@@ -163,6 +163,9 @@ class App(tk.Tk):
         s.configure("Header.TButton", background="#24476E", foreground="white", bordercolor="#24476E",
                     padding=(12, 6))
         s.map("Header.TButton", background=[("active", "#2D5888"), ("disabled", "#3A5272")])
+        s.configure("Danger.TButton", background="#C62828", foreground="white", bordercolor="#C62828",
+                    font=(F, 10, "bold"), padding=(12, 6))
+        s.map("Danger.TButton", background=[("active", "#A61B1B"), ("disabled", "#D98A8A")])
         s.configure("TCheckbutton", background=BG)
         s.configure("TRadiobutton", background=BG)
 
@@ -182,8 +185,11 @@ class App(tk.Tk):
         self.btn_fase2 = ttk.Button(right, text="⟳ Analizar y cruzar", style="Header.TButton",
                                     command=lambda: self._run_fase2(False))
         self.btn_fase2.pack(side="left", padx=4)
+        self.btn_auto = ttk.Button(right, text="", style="Header.TButton", command=self._toggle_auto)
+        self.btn_auto.pack(side="left", padx=4)
         self.btn_now = ttk.Button(right, text="▶  Revisar ahora", style="Accent.TButton", command=self.check_now)
         self.btn_now.pack(side="left", padx=4)
+        self.btn_stop = ttk.Button(right, text="■  Detener", style="Danger.TButton", command=self._detener)
 
         # franja visible mientras hay una operación en curso
         self.busy_bar = tk.Frame(self, bg="#FFF4CC", highlightthickness=1, highlightbackground="#F2D27A")
@@ -191,6 +197,8 @@ class App(tk.Tk):
         self.busy_txt.pack(side="left", padx=(14, 10), pady=6)
         self.busy_prog = ttk.Progressbar(self.busy_bar, mode="indeterminate", length=220)
         self.busy_prog.pack(side="left", pady=6)
+        ttk.Button(self.busy_bar, text="■ Detener", style="Danger.TButton",
+                   command=self._detener).pack(side="right", padx=10, pady=4)
         tk.Label(self.busy_bar, text="Puedes seguir revisando y editando noticias mientras tanto; "
                                      "la vista previa y el periódico esperan a que termine.",
                  bg="#FFF4CC", fg="#6B4E00", font=(F, 9)).pack(side="left", padx=12)
@@ -574,8 +582,40 @@ class App(tk.Tk):
             self.next_check = None
             self.status.set("Primer uso: Configuración → 'Iniciar sesión en Facebook', luego 'Revisar ahora'.")
             return
+        self._pintar_auto()
+        if not self.cfg.get("revision_automatica", True):
+            self.next_check = None
+            return
         mins = self.cfg["intervalo_min"]
         self.next_check = datetime.now() + (timedelta(seconds=5) if initial else timedelta(minutes=mins))
+
+    def _pintar_auto(self):
+        if self.cfg.get("revision_automatica", True):
+            self.btn_auto.configure(text=f"⏸  Pausar automático ({self.cfg['intervalo_min']} min)")
+        else:
+            self.btn_auto.configure(text="▶  Reanudar automático")
+
+    def _toggle_auto(self):
+        activo = not self.cfg.get("revision_automatica", True)
+        self.cfg["revision_automatica"] = activo
+        save_config(self.cfg)
+        if activo:
+            self.next_check = datetime.now() + timedelta(minutes=self.cfg["intervalo_min"])
+            self._aviso(f"Revisión automática activada: cada {self.cfg['intervalo_min']} min "
+                        f"(próxima a las {self.next_check:%H:%M}).", "ok")
+        else:
+            self.next_check = None
+            self._aviso("Revisión automática pausada. Solo se revisará al pulsar «Revisar ahora».", "warn")
+        self._pintar_auto()
+
+    def _detener(self):
+        if not self.running and not fase2_lock.locked():
+            self._aviso("No hay ninguna revisión en curso.", "info")
+            return
+        detener.set()
+        self.busy_txt.configure(text="⏳ Deteniendo… se cierra el navegador en unos segundos")
+        self.btn_stop.state(["disabled"])
+        self._aviso("Deteniendo la revisión. Lo que ya se leyó queda guardado.", "warn")
 
     def _set_busy(self, busy, texto=None):
         self.running = busy
@@ -584,10 +624,13 @@ class App(tk.Tk):
         self.chip.configure(text=f"● {texto or ('Trabajando…' if busy else 'En espera')}",
                             fg="#FFD27A" if busy else "#9FE2B0")
         if busy:
+            self.btn_stop.state(["!disabled"])
+            self.btn_stop.pack(side="left", padx=4)
             self.busy_txt.configure(text=f"⏳ {texto or 'Trabajando…'}")
             self.busy_bar.pack(fill="x", after=self.chip.master.master, padx=12, pady=(8, 0))
             self.busy_prog.start(12)
         else:
+            self.btn_stop.pack_forget()
             self.busy_prog.stop()
             self.busy_bar.pack_forget()
 
@@ -615,7 +658,9 @@ class App(tk.Tk):
 
     def check_now(self):
         if self.running:
+            self._aviso("Ya hay una revisión en curso (franja amarilla). Puedes detenerla con «■ Detener».", "warn")
             return
+        detener.clear()
         self._set_busy(True, "Revisando Facebook…")
         self.last_error = ""
         self.status.set("Iniciando revisión…")
@@ -639,7 +684,8 @@ class App(tk.Tk):
 
         def run():
             try:
-                ciclo_fase2(cfg, self._emit, forzar_pdf=forzar_pdf)
+                detener.clear()
+                ciclo_fase2(cfg, self._emit, forzar_pdf=forzar_pdf, cancelar=detener.is_set)
             finally:
                 self.q.put(("fase2_manual_fin", None))
 
@@ -662,6 +708,8 @@ class App(tk.Tk):
             self.check_now()
         if self.running:
             nxt = "en curso…"
+        elif not self.cfg.get("revision_automatica", True):
+            nxt = "automático pausado (solo manual)"
         else:
             nxt = self.next_check.strftime("%H:%M:%S") if self.next_check else "—"
         last = self.last_check.strftime("%d/%m %H:%M") if self.last_check else "—"
@@ -695,6 +743,8 @@ class App(tk.Tk):
                 elif ev == "fase2_fin":
                     self._refresh_dashboard()
                     self._load_posts()
+                elif ev == "detenido":
+                    self._aviso("Revisión detenida. Lo leído hasta ese momento quedó guardado.", "warn")
                 elif ev == "fase2_manual_fin":
                     self._set_busy(False)
                     if not self.last_error:
@@ -705,7 +755,8 @@ class App(tk.Tk):
                     self._schedule()
                     self._load_posts()
                     self._refresh_dashboard()
-                    self.status.set(f"Revisión terminada: {d} publicación(es) nueva(s)."
+                    self.status.set(f"Revisión {'detenida' if detener.is_set() else 'terminada'}: "
+                                    f"{d} publicación(es) nueva(s)."
                                     + (f"  Último error: {self.last_error}" if self.last_error else ""))
         except queue.Empty:
             pass

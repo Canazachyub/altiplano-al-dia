@@ -12,7 +12,7 @@ from .ai import redactar
 from .config import LOG_PATH, get_api_key, page_slug
 from .pdfgen import generar_pdf
 from .imagenes import descargar_imagen, og_image
-from .scraper import NotLoggedIn, open_context, scrape_page
+from .scraper import Cancelado, NotLoggedIn, open_context, scrape_page
 
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(filename=LOG_PATH, level=logging.INFO, encoding="utf-8",
@@ -21,6 +21,8 @@ log = logging.getLogger("monitor")
 
 # un solo uso del perfil de navegador a la vez (revisión o login)
 browser_lock = threading.Lock()
+# botón "Detener": corta la revisión (y la Fase 2) en el próximo punto seguro
+detener = threading.Event()
 
 
 def procesar_post(post_id: str, cfg: dict, emit) -> None:
@@ -61,18 +63,23 @@ def revisar(cfg: dict, emit) -> None:
         emit("error", "El navegador está en uso (¿ventana de login abierta?).")
         return
     nuevos = 0
+    detener.clear()
     try:
         with sync_playwright() as pw:
             ctx = open_context(pw, cfg.get("navegador_canal"), cfg.get("headless", False))
             try:
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 for i, pg in enumerate(paginas):
+                    if detener.is_set():
+                        break
                     slug = page_slug(pg["url"])
                     emit("status", f"Revisando {slug} ({i + 1}/{len(paginas)})…")
                     primera_vez = not storage.page_has_history(slug)
                     try:
                         posts = scrape_page(page, pg["url"], cfg["posts_por_revision"],
-                                            storage.is_known, log=log.info)
+                                            storage.is_known, log=log.info, cancelar=detener.is_set)
+                    except Cancelado:
+                        break
                     except NotLoggedIn as e:
                         emit("error", str(e))
                         break
@@ -101,7 +108,7 @@ def revisar(cfg: dict, emit) -> None:
                             nuevos += 1
                             emit("nuevo", p["id"])
                     if i < len(paginas) - 1:
-                        time.sleep(random.uniform(8, 20))
+                        detener.wait(random.uniform(8, 20))   # pausa entre páginas, cortable
             finally:
                 try:
                     ctx.close()
@@ -115,10 +122,15 @@ def revisar(cfg: dict, emit) -> None:
 
     pendientes = storage.pending_posts()
     for row in pendientes:
+        if detener.is_set():
+            break
         if row["estado"] == "pendiente":
             procesar_post(row["id"], cfg, emit)
 
-    if cfg.get("fase2_auto", True):
+    if cfg.get("fase2_auto", True) and not detener.is_set():
         from .analisis import ciclo_fase2
-        ciclo_fase2(cfg, emit)
+        ciclo_fase2(cfg, emit, cancelar=detener.is_set)
+    if detener.is_set():
+        emit("status", f"Revisión detenida por el usuario ({nuevos} publicación(es) nueva(s) guardadas).")
+        emit("detenido", None)
     emit("fin", nuevos)

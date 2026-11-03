@@ -239,8 +239,13 @@ def _expand_and_hover(page, h):
     return {"href": None, "tooltip": tooltip, "aria": aria}
 
 
-def scrape_page(page, url, max_posts=8, is_known=None, log=print, max_scrolls=15):
-    """Recorre el feed de una página y devuelve una lista de posts (orden del feed)."""
+class Cancelado(Exception):
+    """El usuario pulsó Detener."""
+
+
+def scrape_page(page, url, max_posts=8, is_known=None, log=print, max_scrolls=15, cancelar=None):
+    """Recorre el feed de una página y devuelve una lista de posts (orden del feed).
+    cancelar(): si devuelve True, se corta la lectura (Cancelado)."""
     slug = page_slug(url)
     page.goto(url, wait_until="domcontentloaded", timeout=60000)
     pausa(3, 5)
@@ -249,7 +254,11 @@ def scrape_page(page, url, max_posts=8, is_known=None, log=print, max_scrolls=15
 
     posts, vistos, conocidos_seguidos = [], set(), 0
     for _ in range(max_scrolls):
+        if cancelar and cancelar():
+            raise Cancelado()
         for h in page.query_selector_all("div[aria-posinset]"):
+            if cancelar and cancelar():
+                raise Cancelado()
             k = h.get_attribute("aria-posinset")
             if k in vistos:
                 continue

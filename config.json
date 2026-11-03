@@ -34,6 +34,7 @@
   "navegador_canal": "chrome",
   "headless": false,
   "fase2_auto": true,
+  "revision_automatica": true,
   "pdf_consolidado_auto": false,
   "ventana_cruce_horas": 48,
   "ambitos": [
