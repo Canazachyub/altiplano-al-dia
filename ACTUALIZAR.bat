@@ -16,20 +16,23 @@ rem --- 1. cerrar la app si esta abierta (para poder reemplazar archivos)
 powershell -NoProfile -Command "$ps = Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' or Name='python.exe'\"; $ps | Where-Object { $_.CommandLine -like '*main.py*' -and $_.ExecutablePath -like '%~dp0*' } | ForEach-Object { $id = $_.ProcessId; $ps | Where-Object { $_.ParentProcessId -eq $id } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Stop-Process -Id $id -Force }" >nul 2>&1
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' or Name='msedge.exe'\" | Where-Object { $_.CommandLine -like '*%~dp0fb_profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
 
-rem --- 2a. instalado con Git: git pull
-if exist ".git" (
-  where git >nul 2>&1
-  if not errorlevel 1 (
-    echo [1/2] Descargando cambios con Git ...
-    git pull --ff-only
-    if errorlevel 1 (
-      echo  ERROR: git pull fallo. Si cambiaste archivos del programa a mano, avisa antes de forzar.
-      pause & exit /b 1
-    )
-    goto deps
-  )
-)
+rem --- 2a. instalado con Git: git pull (sin bloques entre parentesis: %errorlevel% se lee bien)
+if not exist ".git" goto zip
+where git >nul 2>&1
+if errorlevel 1 goto zip
+echo [1/2] Descargando cambios con Git ...
+rem config.json lo cambia la app (paginas, intervalo): se aparta, se actualiza y se repone
+copy /y config.json "%TEMP%\altiplano_config.json" >nul
+git checkout -- config.json >nul 2>&1
+git pull --ff-only
+set "FALLO=%errorlevel%"
+copy /y "%TEMP%\altiplano_config.json" config.json >nul
+if "%FALLO%"=="0" goto deps
+echo  ERROR: git pull fallo. Si cambiaste archivos del programa a mano, avisa antes de forzar.
+pause
+exit /b 1
 
+:zip
 rem --- 2b. instalado desde el ZIP: se baja el ZIP y se copian solo los archivos del programa
 echo [1/2] Descargando la version nueva (ZIP de GitHub) ...
 set "TMPZ=%TEMP%\altiplano_actualizar"
