@@ -44,6 +44,9 @@ Necesita internet durante la instalación (unos 150 MB entre Python y las depend
     menos de un segundo y cierra el navegador; lo leído hasta ahí queda guardado.
   - **⏸ Pausar automático / ▶ Reanudar automático**: apaga o prende la revisión cada N minutos. En
     pausa solo se revisa al pulsar *Revisar ahora*. Se recuerda al cerrar la app.
+- **Cerrar la app** detiene la revisión en curso, cierra el navegador del monitor y termina el
+  programa. La app no se puede abrir dos veces: si ya está abierta, se muestra esa ventana.
+  No cierres a mano la ventana de Chrome del monitor mientras revisa; usa **■ Detener**.
 - **Bandeja**: las nuevas aparecen resaltadas en amarillo y con notificación de Windows.
   Doble clic abre el PDF. Al seleccionar: texto, *Abrir en Facebook*, *Abrir nota externa*,
   *Abrir PDF*, *Reprocesar IA* (por ejemplo, tras cambiar de proveedor).
