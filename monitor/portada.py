@@ -220,8 +220,14 @@ def _foto(c, a, x, y, w, h, k):
         c.restoreState()
 
 
-def _link(c, a, rect):
+# zonas clicables de la vista previa: [{pag, gid, rect, lugar}] (las llena el render)
+ZONAS = None
+
+
+def _link(c, a, rect, lugar=None):
     c.linkRect("", f"g{a['gid']}", rect, relative=0, thickness=0)
+    if ZONAS is not None:
+        ZONAS.append({"pag": 1, "gid": a["gid"], "rect": [round(v, 1) for v in rect], "lugar": lugar})
 
 
 def _lineas_balanceadas(texto, font, ancho, maxsize):
@@ -296,7 +302,7 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
             _contorno(c, dx0 + 5, y2, ln, HEAVY, size, NEGRO)
             y2 -= size * 1.05
         _etiqueta(c, dx1, fb + 3, pag(a), k)
-        _link(c, a, (dx0, fb, dx1, top))
+        _link(c, a, (dx0, fb, dx1, top), "destacada")
         c.setStrokeColor(NEGRO)
         c.setLineWidth(3)
         c.line(dx0, fb - 0.5, dx1, fb - 0.5)
@@ -373,7 +379,7 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
         yy -= 7
         _foto(c, a, lx0, mz0, lat_w, yy - mz0, k)
         _etiqueta(c, lx0 + 66, mz0 + 3, pag(a), k)
-        _link(c, a, (lx0, mz0, lx1, mz1))
+        _link(c, a, (lx0, mz0, lx1, mz1), "lateral")
 
     # principal: antetítulo arriba y la foto ocupa todo el resto, con el titular encima
     a = principal
@@ -412,7 +418,7 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
                 py += fs * 1.1
             py += 6
         _etiqueta(c, rx1, mz0 + 3, pag(a), k)
-        _link(c, a, (rx0, mz0, rx1, mz1))
+        _link(c, a, (rx0, mz0, rx1, mz1), "principal")
 
     # ---------------- fila inferior: la foto llena cada tarjeta y el titular va encima, a la izquierda
     c.setStrokeColor(AMARILLO)
@@ -448,7 +454,7 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
                 _contorno(c, x0 + 3, yy, ln, HEAVY, size, NEGRO)
                 yy -= size * 1.05
             _etiqueta(c, x0 + cw, y0 + 3, pag(a), k)
-            _link(c, a, (x0, y0, x0 + cw, y1))
+            _link(c, a, (x0, y0, x0 + cw, y1), f"abajo{i + 1}")
     c.setFont(FC_M, 7.5)
     c.setFillColor(colors.HexColor("#555555"))
     c.drawString(M, 20, "Altiplano al Día · boletín elaborado a partir del monitoreo de medios de la región")

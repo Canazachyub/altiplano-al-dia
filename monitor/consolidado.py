@@ -12,6 +12,7 @@ import re
 import unicodedata
 from datetime import datetime
 from functools import lru_cache
+from pathlib import Path
 from xml.sax.saxutils import escape
 
 from PIL import Image
@@ -737,6 +738,12 @@ def _ordenar(arts, cfg):
     return sorted(arts, key=lambda a: (amb.get(a["ambito"], 99), peso(a)))
 
 
+def _zona(pag, a, rect):
+    from . import portada
+    if portada.ZONAS is not None:
+        portada.ZONAS.append({"pag": pag, "gid": a["gid"], "rect": [round(v, 1) for v in rect], "lugar": None})
+
+
 def _render(destino, arts, paginas, numero, ahora, st, cfg):
     paginas_de = {}
     for pg in paginas:
@@ -763,12 +770,14 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
         if pg.full:
             a, h, ops = pg.full
             _dibujar(c, ops, M, pg.top, anclas)
+            _zona(pg.n, a, (M, pg.top - h, W - M, pg.top))
             c.addOutlineEntry(a["titular"][:80], f"g{a['gid']}", level=0)
             continue
         for pila, x, ancho in ((pg.main, pg.x_main, pg.w_main), (pg.lat, pg.x_lat, CW)):
             y = pg.top
             for i, (a, h, ops) in enumerate(pila):
                 _dibujar(c, ops, x, y, anclas)
+                _zona(pg.n, a, (x, y - h, x + ancho, y))
                 c.addOutlineEntry(a["titular"][:80], f"g{a['gid']}", level=0)
                 y -= h
                 if i < len(pila) - 1:
@@ -805,7 +814,16 @@ def generar_consolidado(cfg: dict, grupos=None, destino=None, registrar=True):
         destino = CONSOLIDADOS_DIR / f"{ahora:%Y-%m-%d_%H%M}.pdf"
         if destino.exists():
             destino = CONSOLIDADOS_DIR / f"{ahora:%Y-%m-%d_%H%M%S}.pdf"
-    _render(destino, arts, paginas, numero, ahora, st, cfg)
+    from . import portada
+    portada.ZONAS = []
+    try:
+        _render(destino, arts, paginas, numero, ahora, st, cfg)
+        # mapa de zonas para la vista previa interactiva (qué noticia hay en cada lugar de cada página)
+        mapa = {"ancho": W, "alto": H, "zonas": portada.ZONAS,
+                "titulares": {str(a["gid"]): a["titular"] for a in arts}}
+        Path(str(destino)).with_suffix(".json").write_text(json.dumps(mapa, ensure_ascii=False), encoding="utf-8")
+    finally:
+        portada.ZONAS = None
     if registrar:
         fechas = [g["fecha_hecho"] for g in grupos if g["fecha_hecho"]]
         storage.registrar_consolidado(destino, min(fechas) if fechas else None,

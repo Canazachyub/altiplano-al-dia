@@ -121,7 +121,14 @@ Cada llamada a Claude (tokens de entrada y salida, duración, errores) queda en 
   bajada, cuerpo (párrafos separados por una línea en blanco; `## TEXTO` es un intertítulo),
   textos de portada y la **foto**: una de los posts de la noticia, una de tu PC
   (*Elegir archivo…*) o *Sin foto*. La plantilla no cambia, solo el contenido.
-- **👁 Vista previa** arma el periódico en `data/vista_previa.pdf` sin publicar nada.
+- **👁 Vista previa** abre el periódico **dentro de la app**, página por página (miniaturas a la
+  izquierda, zoom, ◀ ▶ o la rueda del mouse), sin publicar nada:
+  - al pasar el mouse sobre una noticia se marca y muestra su titular;
+  - **clic** en una noticia: abre su editor (texto, foto, titular de portada, si va o no) y al
+    guardar la vista previa se actualiza sola;
+  - **clic derecho**: *Quitar del periódico* o *Poner en la portada como* Principal, Lateral,
+    Destacada o Abajo 1-3;
+  - **📰 Publicar este periódico** lo publica tal como se ve.
 - **📰 Generar periódico** lo genera de verdad y marca esas noticias como publicadas.
 - **Pestaña Portada**: 6 lugares (principal, lateral, destacada y tres abajo). En cada uno eliges la
   noticia, su foto (*Cambiar foto…*, *Otra foto de la noticia*, *Sin foto*) y los textos de portada.

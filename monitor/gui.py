@@ -15,6 +15,7 @@ from .config import (BASE_DIR, EXCEL_PATH, PROFILE_DIR, get_api_key, load_config
 from .editor import EditorNota
 from .gui_portada import PortadaTab
 from .proceso import cerrar_navegador_monitor
+from .vista_previa import VistaPrevia
 from .scraper import interactive_login
 from .worker import browser_lock, detener, procesar_post, revisar
 
@@ -134,6 +135,7 @@ class App(tk.Tk):
         self.after(1000, self._tick)
         self.protocol("WM_DELETE_WINDOW", self._cerrar)
         self._cerrando = False
+        self._ventana_previa = None
 
     # ================================================================== cierre
     def _cerrar(self):
@@ -1161,7 +1163,14 @@ class App(tk.Tk):
         threading.Thread(target=run, daemon=True).start()
 
     def _vista_previa(self):
-        self._generar_pdf(True)
+        """Abre la vista previa interactiva (dentro de la app)."""
+        if not storage.grupos_para_pdf():
+            self._aviso("No hay noticias marcadas (☑) pendientes de publicar.", "warn")
+            return
+        if self._ventana_previa is not None and self._ventana_previa.winfo_exists():
+            self._ventana_previa.traer()
+            return
+        self._ventana_previa = VistaPrevia(self)
 
     def _publicar(self):
         self._generar_pdf(False)

@@ -6,3 +6,4 @@ beautifulsoup4>=4.12
 plyer>=2.1
 openpyxl>=3.1
 pyphen
+pypdfium2
