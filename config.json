@@ -1,0 +1,55 @@
+{
+  "paginas": [
+    {
+      "url": "https://www.facebook.com/unapunooficial",
+      "activa": true
+    },
+    {
+      "url": "https://www.facebook.com/radiopachamama",
+      "activa": false
+    },
+    {
+      "url": "https://www.facebook.com/diariolosandespuno",
+      "activa": false
+    },
+    {
+      "url": "https://www.facebook.com/diariosinfronteras",
+      "activa": false
+    },
+    {
+      "url": "https://www.facebook.com/OndaAzulPuno",
+      "activa": false
+    },
+    {
+      "url": "https://www.facebook.com/larepublicape",
+      "activa": false
+    },
+    {
+      "url": "https://www.facebook.com/famatv27",
+      "activa": false
+    }
+  ],
+  "intervalo_min": 5,
+  "proveedor_ia": "deepseek",
+  "modelo_deepseek": "deepseek-chat",
+  "modelo_claude": "claude-sonnet-5-5",
+  "posts_por_revision": 5,
+  "procesar_en_primera_revision": 3,
+  "navegador_canal": "chrome",
+  "headless": false,
+  "fase2_auto": true,
+  "pdf_consolidado_auto": true,
+  "ventana_cruce_horas": 48,
+  "ambitos": ["DISTRITAL", "LOCAL", "REGIONAL", "NACIONAL", "INTERNACIONAL"],
+  "temas": ["Política", "Deportes", "Economía", "Educación", "Salud", "Seguridad/Policiales",
+            "Sociedad", "Cultura", "Medio ambiente", "Otros"],
+  "nombres_medios": {
+    "unapunooficial": "UNA Puno",
+    "radiopachamama": "Radio Pachamama",
+    "diariolosandespuno": "Diario Los Andes",
+    "diariosinfronteras": "Diario Sin Fronteras",
+    "OndaAzulPuno": "Radio Onda Azul",
+    "larepublicape": "La República",
+    "famatv27": "Fama TV"
+  }
+}

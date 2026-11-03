@@ -1,0 +1,14 @@
+# entorno y Python local que instala INSTALAR.bat
+.venv/
+python/
+__pycache__/
+
+# secretos y sesión de Facebook: NUNCA subir
+.env
+fb_profile/
+
+# datos generados
+data/
+pdfs/
+noticias*.xlsx
+*.log

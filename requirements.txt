@@ -1,0 +1,7 @@
+playwright>=1.48
+reportlab>=4.0
+requests>=2.31
+python-dotenv>=1.0
+beautifulsoup4>=4.12
+plyer>=2.1
+openpyxl>=3.1
