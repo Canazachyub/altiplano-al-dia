@@ -855,6 +855,12 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
                 if caja:
                     tb, th = caja
                     tb.drawOn(c, x, y - GAP - th)
+                    from . import portada as _p
+                    if _p.ZONAS is not None:
+                        _p.ZONAS.append({"pag": pg.n, "gid": None, "lugar": "datos",
+                                         "gids": [a["gid"] for a, _, _ in pila],
+                                         "rect": [round(x, 1), round(y - GAP - th, 1), round(x + ancho, 1),
+                                                  round(y - GAP, 1)]})
                     y -= th + GAP
             if not (pg.portada and pila is pg.lat):
                 y_hueco = y - (GAP if pila else 0)

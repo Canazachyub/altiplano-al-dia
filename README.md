@@ -149,6 +149,10 @@ Cada llamada a Claude (tokens de entrada y salida, duración, errores) queda en 
     página (la página se reacomoda sola);
   - clic derecho → **Mover a la página…** fija en qué página va una noticia (y *Dejar que se ubique
     sola* lo deshace);
+  - clic en una caja **Datos clave**: se editan los datos de las noticias que la forman (uno por
+    línea; también desde el editor de cada nota);
+  - **🎨 Diseño → Portada**: tipografía de cada parte de la portada (titular principal, otros
+    titulares, antetítulos, puntos clave, cinta y banda, etiquetas) y su tamaño de letra;
   - **🎨 Diseño**: panel con los **textos fijos** (lema, cinta, banda, pies, firma, índice, caja de
     datos), los **colores** (principal, acento, alerta, texto y el de cada tema), las **tipografías**
     de cada parte y los **tamaños**. Trae combinaciones listas (*Altiplano*, *Clásico sobrio*,

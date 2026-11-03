@@ -293,6 +293,8 @@ class VistaPrevia(tk.Toplevel):
         self.cv.configure(cursor="hand2")
         if z.get("lugar") == "hueco":
             self.tip.configure(text="Espacio libre: clic para añadir una noticia en esta página")
+        elif z.get("lugar") == "datos":
+            self.tip.configure(text="Datos clave: clic para editarlos")
         else:
             tit = self.mapa.get("titulares", {}).get(str(z["gid"]), "")
             lugar = dict(portada.LUGARES).get(z.get("lugar"), "")
@@ -309,6 +311,9 @@ class VistaPrevia(tk.Toplevel):
             return
         if z.get("lugar") == "hueco":
             ElegirNoticia(self, z["pag"])
+        elif z.get("lugar") == "datos":
+            from .editor import EditorDatos
+            EditorDatos(self, z["gids"], on_save=self._tras_cambio)
         else:
             self._editar(z["gid"])
 
@@ -327,6 +332,10 @@ class VistaPrevia(tk.Toplevel):
             return
         if z.get("lugar") == "hueco":
             ElegirNoticia(self, z["pag"])
+            return
+        if z.get("lugar") == "datos":
+            from .editor import EditorDatos
+            EditorDatos(self, z["gids"], on_save=self._tras_cambio)
             return
         gid = z["gid"]
         tit = self.mapa.get("titulares", {}).get(str(gid), "")[:60]

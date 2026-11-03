@@ -41,12 +41,31 @@ FAMILIAS = {
 }
 
 ROLES = {   # rol -> (nombre visible, familia predeterminada)
-    "titular_portada": ("Titulares de portada", "Alfa Slab One"),
     "titular": ("Titulares interiores", "Zilla Slab"),
     "texto": ("Texto de las noticias", "PT Serif"),
     "antetitulo": ("Antetítulos, puntos y etiquetas", "Fira Sans Condensed"),
     "detalles": ("Pies de foto, índice y pies de página", "PT Sans Narrow"),
 }
+
+ROLES_PORTADA = {
+    "portada_principal": ("Titular principal", "Alfa Slab One"),
+    "portada_titulares": ("Titulares de las otras notas", "Alfa Slab One"),
+    "portada_antetitulos": ("Antetítulos", "Fira Sans Condensed"),
+    "portada_puntos": ("Puntos clave (sobre la foto)", "Fira Sans Condensed"),
+    "portada_banda": ("Cinta y banda «Hoy en Puno»", "Alfa Slab One"),
+    "portada_etiquetas": ("Etiquetas «PÁG.», lema y fecha", "Fira Sans Condensed"),
+}
+TODOS_ROLES = {**ROLES, **ROLES_PORTADA}
+
+TAMANOS_PORTADA = [   # clave, nombre, mínimo, máximo, paso
+    ("portada_principal", "Titular principal (máx. pt)", 30, 90, 2),
+    ("portada_lateral", "Titular lateral (máx. pt)", 14, 44, 1),
+    ("portada_destacada", "Titular destacada (máx. pt)", 10, 26, 1),
+    ("portada_abajo", "Titulares de abajo (máx. pt)", 10, 26, 1),
+    ("portada_antetitulo", "Antetítulos (pt)", 8, 16, 0.5),
+    ("portada_puntos", "Puntos clave (pt)", 9, 18, 0.5),
+    ("portada_banda", "Banda «N noticias al día» (pt)", 12, 26, 1),
+]
 
 DEFAULT = {
     "textos": {
@@ -77,13 +96,15 @@ DEFAULT = {
                   "Educación": "#6A1B9A", "Salud": "#00838F", "Sociedad": "#D84315", "Cultura": "#AD1457",
                   "Deportes": "#1565C0", "Medio ambiente": "#2E7D32", "Otros": "#37474F"},
     },
-    "fuentes": {rol: fam for rol, (_, fam) in ROLES.items()},
+    "fuentes": {rol: fam for rol, (_, fam) in TODOS_ROLES.items()},
     "tamanos": {
         "texto": 9.0,            # pt del cuerpo de las noticias
         "antetitulo": 11.0,      # pt
         "pie_foto": 7.8,         # pt
         "titulares": 100,        # % sobre el tamaño calculado (interiores)
-        "titulares_portada": 100,  # % (portada)
+        "titulares_portada": 100,  # % (portada, multiplica a los de abajo)
+        "portada_principal": 64, "portada_lateral": 30, "portada_destacada": 17, "portada_abajo": 17,
+        "portada_antetitulo": 11, "portada_puntos": 13.5, "portada_banda": 19,
     },
 }
 
@@ -106,20 +127,27 @@ PRESETS = {
     "Clásico sobrio": {
         "colores": {"principal": "#1B2A41", "degradado": "#4A5D7A", "acento": "#E2B93B", "alerta": "#8B1E1E",
                     "texto": "#161616"},
-        "fuentes": {"titular_portada": "Zilla Slab", "titular": "PT Serif", "texto": "PT Serif",
-                    "antetitulo": "PT Sans Narrow", "detalles": "PT Sans Narrow"},
+        "fuentes": {"titular": "PT Serif", "texto": "PT Serif", "antetitulo": "PT Sans Narrow",
+                    "detalles": "PT Sans Narrow", "portada_principal": "Zilla Slab", "portada_titulares": "Zilla Slab",
+                    "portada_antetitulos": "PT Sans Narrow", "portada_puntos": "PT Serif",
+                    "portada_banda": "Zilla Slab", "portada_etiquetas": "PT Sans Narrow"},
     },
     "Moderno": {
         "colores": {"principal": "#0057B8", "degradado": "#3FA9F5", "acento": "#FFD100", "alerta": "#E4002B",
                     "texto": "#101820"},
-        "fuentes": {"titular_portada": "Fira Sans Condensed", "titular": "Fira Sans Condensed", "texto": "PT Serif",
-                    "antetitulo": "Fira Sans Condensed", "detalles": "Fira Sans Condensed"},
+        "fuentes": {"titular": "Fira Sans Condensed", "texto": "PT Serif", "antetitulo": "Fira Sans Condensed",
+                    "detalles": "Fira Sans Condensed", "portada_principal": "Fira Sans Condensed",
+                    "portada_titulares": "Fira Sans Condensed", "portada_antetitulos": "Fira Sans Condensed",
+                    "portada_puntos": "Fira Sans Condensed", "portada_banda": "Fira Sans Condensed",
+                    "portada_etiquetas": "Fira Sans Condensed"},
     },
     "Alto contraste": {
         "colores": {"principal": "#111111", "degradado": "#4B4B4B", "acento": "#FFEE00", "alerta": "#D50000",
                     "texto": "#000000"},
-        "fuentes": {"titular_portada": "Alfa Slab One", "titular": "Zilla Slab", "texto": "PT Serif",
-                    "antetitulo": "Fira Sans Condensed", "detalles": "PT Sans Narrow"},
+        "fuentes": {"titular": "Zilla Slab", "texto": "PT Serif", "antetitulo": "Fira Sans Condensed",
+                    "detalles": "PT Sans Narrow", "portada_principal": "Impact", "portada_titulares": "Impact",
+                    "portada_antetitulos": "Fira Sans Condensed", "portada_puntos": "Fira Sans Condensed",
+                    "portada_banda": "Impact", "portada_etiquetas": "Fira Sans Condensed"},
     },
 }
 
@@ -140,6 +168,10 @@ def cargar() -> dict:
         guardado = json.loads(DISENO_PATH.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         guardado = {}
+    viejo = (guardado.get("fuentes") or {}).pop("titular_portada", None)
+    if viejo:
+        for rol in ("portada_principal", "portada_titulares", "portada_banda"):
+            guardado["fuentes"].setdefault(rol, viejo)
     return _mezclar(DEFAULT, guardado)
 
 
@@ -190,7 +222,16 @@ def color_tema_hex(d: dict, tema: str) -> str:
 # ------------------------------------------------------------------ tipografías
 # alias usados por la maqueta -> (rol, pesos preferidos en orden)
 _ALIAS = {
-    "Heavy": ("titular_portada", ["XB", "R", "B"]),
+    "Heavy": ("portada_principal", ["XB", "R", "B"]),
+    "P-Tit": ("portada_principal", ["XB", "R", "B"]),
+    "P-Tit2": ("portada_titulares", ["XB", "R", "B"]),
+    "P-Ante": ("portada_antetitulos", ["SB", "B", "R"]),
+    "P-AnteXB": ("portada_antetitulos", ["XB", "B", "R"]),
+    "P-Pun": ("portada_puntos", ["XBI", "I", "XB", "B", "R"]),
+    "P-Banda": ("portada_banda", ["XB", "R", "B"]),
+    "P-Etq": ("portada_etiquetas", ["XB", "B", "R"]),
+    "P-EtqB": ("portada_etiquetas", ["B", "SB", "R"]),
+    "P-EtqM": ("portada_etiquetas", ["R", "SB", "B"]),
     "Slab": ("titular", ["B", "XB", "R"]),
     "Slab-Semi": ("titular", ["R", "SB", "B"]),
     "Serif": ("texto", ["R", "B"]),
@@ -218,8 +259,8 @@ def _archivo(familia, pesos):
 def aplicar_fuentes(d: dict) -> None:
     """Registra en ReportLab los alias de la maqueta con las familias elegidas en el diseño."""
     for alias, (rol, pesos) in _ALIAS.items():
-        fam = d["fuentes"].get(rol) or ROLES[rol][1]
-        f = _archivo(fam, pesos) or _archivo(ROLES[rol][1], pesos)
+        fam = d["fuentes"].get(rol) or TODOS_ROLES[rol][1]
+        f = _archivo(fam, pesos) or _archivo(TODOS_ROLES[rol][1], pesos)
         # ReportLab no reemplaza una fuente ya registrada con el mismo nombre: se quita antes
         pdfmetrics._fonts.pop(alias, None)
         pdfmetrics.registerFont(TTFont(alias, str(f)))

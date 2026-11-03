@@ -206,11 +206,11 @@ def _velo(c, x, y, w, h, hacia="abajo", a0=0.85, a1=0.0, color=colors.white, pas
 
 def _etiqueta(c, x_der, y, pag, k):
     t = f"‹‹ PÁG. {pag}"
-    w = pdfmetrics.stringWidth(t, FC_XB, 10) + 12
+    w = pdfmetrics.stringWidth(t, "P-Etq", 10) + 12
     c.setFillColor(k["AMARILLO"])
     c.rect(x_der - w, y, w, 16, stroke=0, fill=1)
     c.setFillColor(k["AZUL"])
-    c.setFont(FC_XB, 10)
+    c.setFont("P-Etq", 10)
     c.drawString(x_der - w + 6, y + 4.5, t)
 
 
@@ -260,6 +260,8 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
     ROJO = k.get("ROJO", colors.HexColor("#C62828"))
     NEGRO = colors.HexColor(_d()["colores"]["texto"])
     ep = float(_d()["tamanos"].get("titulares_portada", 100)) / 100
+    TAM = {k: float(x) for k, x in _d()["tamanos"].items()}
+    TA, TP, TB = TAM["portada_antetitulo"], TAM["portada_puntos"], TAM["portada_banda"]
     v = {"numero": numero, "fecha": f"{ahora:%d/%m/%Y}", "hora": f"{ahora:%H:%M}", "n": len(arts_todos)}
     W, H = k["W"], k["H"]
     M = 20
@@ -280,12 +282,12 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
     lh = lw * 297 / 999
     c.drawImage(k["logo_blanco"](), M + 12, top - 8 - lh, lw, lh, mask="auto")
     c.setFillColor(AMARILLO)
-    c.setFont(FC_B, 11)
+    c.setFont("P-EtqB", 11)
     c.drawString(M + 14, top - cab_h + 8, _t("lema", **v))
 
     fy = top - cab_h - 15
     c.setFillColor(NEGRO)
-    c.setFont(FC_M, 10.5)
+    c.setFont("P-EtqM", 10.5)
     partes = [k["fecha_larga"](ahora), _t("franja_2", **v), _t("franja_3", **v)]
     for i, (p, xx) in enumerate(zip(partes, (M, M + 154, M + 258))):
         c.drawString(xx + (7 if i else 0), fy, p)
@@ -304,17 +306,17 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
         t = tx[a["gid"]]
         c.setFillColor(color_tema(a["tema"]))
         yy = top - 10
-        for ln in simpleSplit(plano(t["ante"]), FC_SB, 11, dx1 - dx0)[:2]:
-            c.setFont(FC_SB, 11)
+        for ln in simpleSplit(plano(t["ante"]), "P-Ante", TA, dx1 - dx0)[:2]:
+            c.setFont("P-Ante", TA)
             c.drawString(dx0, yy, ln)
             yy -= 12
         fb, ft = fy - 7, yy - 1
         _foto(c, a, dx0, fb, dx1 - dx0, ft - fb, k)
         _velo(c, dx0, fb, dx1 - dx0, ft - fb, "derecha", 0.75, 0.0)
-        size, lineas = _ajustar(plano(t["portada"]).upper(), HEAVY, (dx1 - dx0) * 0.8, ft - fb - 26, 17 * ep, 9, 5, 1.05)
+        size, lineas = _ajustar(plano(t["portada"]).upper(), "P-Tit2", (dx1 - dx0) * 0.8, ft - fb - 26, TAM["portada_destacada"] * ep, 8, 5, 1.05)
         y2 = ft - size - 4
         for ln in lineas:
-            _contorno(c, dx0 + 5, y2, ln, HEAVY, size, NEGRO)
+            _contorno(c, dx0 + 5, y2, ln, "P-Tit2", size, NEGRO)
             y2 -= size * 1.05
         _etiqueta(c, dx1, fb + 3, pag(a), k)
         _link(c, a, (dx0, fb, dx1, top), "destacada")
@@ -341,15 +343,15 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
     c.setFillColor(ROJO)
     c.rect(0, 0, 124, 30, stroke=0, fill=1)
     c.setFillColor(colors.white)
-    c.setFont(HEAVY, 13)
+    c.setFont("P-Banda", 13)
     c.drawCentredString(62, 10, _t("cinta", **v))
     c.restoreState()
-    c.setFont(HEAVY, 19)
+    c.setFont("P-Banda", TB)
     tit = _t("banda_1", **v) + " "
     c.setFillColor(colors.white)
     c.drawString(M + 160, by0 + 26, tit)
     c.setFillColor(AMARILLO)
-    c.drawString(M + 160 + pdfmetrics.stringWidth(tit, HEAVY, 19), by0 + 26, _t("banda_2", **v))
+    c.drawString(M + 160 + pdfmetrics.stringWidth(tit, "P-Banda", TB), by0 + 26, _t("banda_2", **v))
     xx = M + 160
     for amb in cfg["ambitos"]:
         n = sum(1 for x in arts_todos if x["ambito"] == amb)
@@ -359,10 +361,10 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
         if ico:
             c.drawImage(ico, xx, by0 + 8, 13, 13, mask="auto")
         c.setFillColor(colors.white)
-        c.setFont(FC_SB, 10)
+        c.setFont("P-Ante", 10)
         lab = f"{amb.title()} {n}"
         c.drawString(xx + 15, by0 + 11, lab)
-        xx += 15 + pdfmetrics.stringWidth(lab, FC_SB, 10) + 12
+        xx += 15 + pdfmetrics.stringWidth(lab, "P-Ante", 10) + 12
 
     # ---------------- zona media
     mz1, mz0 = by0 - 12, 205
@@ -379,16 +381,16 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
         t = tx[a["gid"]]
         yy = mz1 - 11
         c.setFillColor(color_tema(a["tema"]))
-        for ln in simpleSplit(plano(t["ante"]), FC_SB, 12, lat_w)[:4]:
-            c.setFont(FC_SB, 12)
+        for ln in simpleSplit(plano(t["ante"]), "P-Ante", TA * 1.09, lat_w)[:4]:
+            c.setFont("P-Ante", TA * 1.09)
             c.drawString(lx0, yy, ln)
             yy -= 13
         yy -= 3
-        size, lineas = _ajustar(plano(t["portada"]).upper(), HEAVY, lat_w, 170, 30 * ep, 13, 6, 1.0)
+        size, lineas = _ajustar(plano(t["portada"]).upper(), "P-Tit2", lat_w, 170, TAM["portada_lateral"] * ep, 11, 6, 1.0)
         for ln in lineas:
             yy -= size * 0.9
             c.setFillColor(NEGRO)
-            c.setFont(HEAVY, size)
+            c.setFont("P-Tit2", size)
             c.drawString(lx0, yy, ln)
             yy -= size * 0.12
         yy -= 7
@@ -401,30 +403,34 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
     if a:
         t = tx[a["gid"]]
         yy = mz1
-        size_a, lin_a = _ajustar(plano(t["ante"]).upper(), FC_XB, rx1 - rx0, 36, 17, 10, 2, 1.05)
+        size_a, lin_a = _ajustar(plano(t["ante"]).upper(), "P-AnteXB", rx1 - rx0, 36, TA * 1.55, 9, 2, 1.05)
         for ln in lin_a:
             yy -= size_a * 0.92
             c.setFillColor(NEGRO)
-            c.setFont(FC_XB, size_a)
+            c.setFont("P-AnteXB", size_a)
             c.drawString(rx0, yy, ln)
             yy -= size_a * 0.14
         foto_top = yy - 5
         _foto(c, a, rx0, mz0, rx1 - rx0, foto_top - mz0, k)
-        size, lineas = _lineas_balanceadas(plano(t["portada"]).upper(), HEAVY, rx1 - rx0 - 8, 64 * ep)
+        size, lineas = _lineas_balanceadas(plano(t["portada"]).upper(), "P-Tit", rx1 - rx0 - 8, TAM["portada_principal"] * ep)
         alto_tit = len(lineas) * size * 0.98 + 10
         _velo(c, rx0, foto_top - alto_tit * 1.25, rx1 - rx0, alto_tit * 1.25, "abajo", 0.8, 0.0)
         y2 = foto_top - 4
         for i, ln in enumerate(lineas):
             y2 -= size * 0.86
-            _contorno(c, rx0 + 4, y2, ln, HEAVY, size, color_tema(a["tema"]) if i == 0 else NEGRO,
+            _contorno(c, rx0 + 4, y2, ln, "P-Tit", size, color_tema(a["tema"]) if i == 0 else NEGRO,
                       grosor=size * 0.1)
             y2 -= size * 0.12
         puntos = [plano(p) for p in t["puntos"]][:2] or [plano(a["nota"].get("BAJADA") or "")]
         py = mz0 + 26
-        for ptxt in reversed([p for p in puntos if p]):
-            fs, lineas_p = _ajustar(ptxt, FC_XBI, (rx1 - rx0) * 0.62, 60, 13.5, 10, 4, 1.1)
+        puntos = [p for p in puntos if p]
+        ancho_p = (rx1 - rx0) * 0.62
+        # mismo tamaño para todos los puntos: el que entra en el más largo
+        fs = min([_ajustar(p, "P-Pun", ancho_p, 60 * TP / 13.5, TP, 8, 4, 1.1)[0] for p in puntos] or [TP])
+        for ptxt in reversed(puntos):
+            lineas_p = simpleSplit(ptxt, "P-Pun", fs, ancho_p)[:4]
             for j, ln in enumerate(reversed(lineas_p)):
-                _contorno(c, rx0 + 24, py, ln, FC_XBI, fs, NEGRO, grosor=3, sombra=False)
+                _contorno(c, rx0 + 24, py, ln, "P-Pun", fs, NEGRO, grosor=3, sombra=False)
                 if j == len(lineas_p) - 1:
                     c.setFillColor(ROJO)
                     c.setStrokeColor(colors.white)
@@ -456,21 +462,21 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
                 c.setLineWidth(0.9)
                 c.line(x0 - gap / 2, y0, x0 - gap / 2, y1)
             c.setFillColor(color_tema(a["tema"]))
-            c.setFont(FC_SB, 10.5)
-            ante = simpleSplit(plano(t["ante"]), FC_SB, 10.5, cw)[:2]
+            c.setFont("P-Ante", TA * 0.95)
+            ante = simpleSplit(plano(t["ante"]), "P-Ante", TA * 0.95, cw)[:2]
             for j, ln in enumerate(ante):
                 c.drawString(x0, y1 - 9 - j * 11, ln)
             ft = y1 - 15 - 11 * max(0, len(ante) - 1)
             _foto(c, a, x0, y0, cw, ft - y0, k)
             _velo(c, x0, y0, cw * 0.8, ft - y0, "derecha", 0.85, 0.0)
-            size, lineas = _ajustar(plano(t["portada"]).upper(), HEAVY, cw * 0.82, ft - y0 - 24, 17 * ep, 9, 4, 1.05)
+            size, lineas = _ajustar(plano(t["portada"]).upper(), "P-Tit2", cw * 0.82, ft - y0 - 24, TAM["portada_abajo"] * ep, 8, 4, 1.05)
             yy = ft - size - 3
             for ln in lineas:
-                _contorno(c, x0 + 3, yy, ln, HEAVY, size, NEGRO)
+                _contorno(c, x0 + 3, yy, ln, "P-Tit2", size, NEGRO)
                 yy -= size * 1.05
             _etiqueta(c, x0 + cw, y0 + 3, pag(a), k)
             _link(c, a, (x0, y0, x0 + cw, y1), f"abajo{i + 1}")
-    c.setFont(FC_M, 7.5)
+    c.setFont("P-EtqM", 7.5)
     c.setFillColor(colors.HexColor("#555555"))
     c.drawString(M, 20, _t("pie_portada_izq", **v))
     c.drawRightString(W - M, 20, _t("pie_portada_der", **v))

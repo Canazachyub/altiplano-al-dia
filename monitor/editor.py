@@ -74,6 +74,10 @@ class EditorNota(tk.Toplevel):
         ttk.Label(izq, text="Deja una línea en blanco entre párrafos. Un párrafo que empieza con «## » "
                             "es un intertítulo.", foreground=MUTED).grid(row=fila, column=1, sticky="w")
         fila += 1
+        ttk.Label(izq, text="Datos clave\n(uno por línea)").grid(row=fila, column=0, sticky="nw", pady=3)
+        self.datos = self._texto(izq, 4, datos_a_texto(self.nota))
+        self.datos.grid(row=fila, column=1, sticky="ew", pady=3)
+        fila += 1
 
         port = ttk.LabelFrame(izq, text="  Si sale en portada  ", padding=8)
         port.grid(row=fila, column=0, columnspan=2, sticky="ew", pady=(10, 0))
@@ -194,6 +198,7 @@ class EditorNota(tk.Toplevel):
             n[clave] = e.get().strip()
         n["BAJADA"] = self.bajada.get("1.0", "end").strip()
         n["CUERPO"] = self.cuerpo.get("1.0", "end").strip()
+        n["DATOS"] = texto_a_datos(self.nota, self.datos.get("1.0", "end"))
         if not n["TITULAR"] or not n["CUERPO"]:
             messagebox.showwarning("Editar nota", "El titular y el cuerpo no pueden quedar vacíos.", parent=self)
             return
@@ -213,6 +218,62 @@ class EditorNota(tk.Toplevel):
         n["_EDITADO"] = datetime.now().isoformat(timespec="seconds")
         storage.guardar_nota(self.gid, n)
         storage.set_en_periodico([self.gid], self.incluir.get())
+        if self.on_save:
+            self.on_save()
+        self.destroy()
+
+
+def datos_a_texto(nota: dict) -> str:
+    out = []
+    for d in nota.get("DATOS") or []:
+        out.append(d.get("dato", "") if isinstance(d, dict) else str(d))
+    return "\n".join(x for x in out if x.strip())
+
+
+def texto_a_datos(nota: dict, texto: str) -> list:
+    """Líneas -> DATOS, conservando los medios de cada dato que no cambió (para la ficha interna)."""
+    previos = {}
+    for d in nota.get("DATOS") or []:
+        if isinstance(d, dict):
+            previos[d.get("dato", "").strip()] = d.get("fuentes", [])
+    lineas = [x.strip(" •-\t") for x in texto.splitlines() if x.strip(" •-\t")]
+    if previos or any(isinstance(d, dict) for d in nota.get("DATOS") or []):
+        return [{"dato": x, "fuentes": previos.get(x, [])} for x in lineas]
+    return lineas
+
+
+class EditorDatos(tk.Toplevel):
+    """Edita la caja «Datos clave» de una página: los datos de cada noticia que la forman."""
+
+    def __init__(self, master, gids, on_save=None):
+        super().__init__(master)
+        self.title("Editar datos clave")
+        self.geometry("760x600")
+        self.transient(master)
+        self.on_save = on_save
+        ttk.Label(self, text="Un dato por línea. Si borras todos los datos de las noticias, la caja no se muestra.",
+                  foreground=MUTED, padding=(12, 10, 12, 4)).pack(anchor="w")
+        cuerpo = ttk.Frame(self, padding=(12, 0))
+        cuerpo.pack(fill="both", expand=True)
+        self.campos = {}
+        for gid in gids:
+            g = storage.get_grupo(gid)
+            nota = json.loads(g["nota_json"])
+            ttk.Label(cuerpo, text=(g["titular"] or "")[:100], font=(F, 10, "bold")).pack(anchor="w", pady=(10, 2))
+            t = tk.Text(cuerpo, height=5, wrap="word", font=(F, 10), relief="solid", borderwidth=1, padx=6, pady=4)
+            t.insert("1.0", datos_a_texto(nota))
+            t.pack(fill="both", expand=True)
+            self.campos[gid] = (t, nota)
+        pie = ttk.Frame(self, padding=12)
+        pie.pack(fill="x")
+        ttk.Button(pie, text="Guardar", style="Accent.TButton", command=self._guardar).pack(side="right")
+        ttk.Button(pie, text="Cancelar", command=self.destroy).pack(side="right", padx=6)
+        self.grab_set()
+
+    def _guardar(self):
+        for gid, (t, nota) in self.campos.items():
+            nota["DATOS"] = texto_a_datos(nota, t.get("1.0", "end"))
+            storage.guardar_nota(gid, nota)
         if self.on_save:
             self.on_save()
         self.destroy()

@@ -57,9 +57,11 @@ class PanelDiseno(tk.Frame):
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=6, pady=4)
         self.t_textos, self.t_colores, self.t_letras = _Scroll(nb), _Scroll(nb), _Scroll(nb)
+        self.t_portada = _Scroll(nb)
         nb.add(self.t_textos, text="Textos")
         nb.add(self.t_colores, text="Colores")
         nb.add(self.t_letras, text="Letras")
+        nb.add(self.t_portada, text="Portada")
 
         pie = tk.Frame(self, bg="#FFFFFF")
         pie.pack(fill="x", padx=10, pady=8)
@@ -69,7 +71,7 @@ class PanelDiseno(tk.Frame):
 
     # ------------------------------------------------------------------
     def _llenar(self):
-        for t in (self.t_textos, self.t_colores, self.t_letras):
+        for t in (self.t_textos, self.t_colores, self.t_letras, self.t_portada):
             for w in t.dentro.winfo_children():
                 w.destroy()
         d = self.d
@@ -113,9 +115,30 @@ class PanelDiseno(tk.Frame):
         for clave, nombre, de, a, paso in (("texto", "Texto de las noticias (pt)", 7, 13, 0.5),
                                            ("antetitulo", "Antetítulos (pt)", 8, 16, 0.5),
                                            ("pie_foto", "Pies de foto (pt)", 6, 11, 0.2),
-                                           ("titulares", "Titulares interiores (%)", 70, 140, 5),
-                                           ("titulares_portada", "Titulares de portada (%)", 70, 140, 5)):
+                                           ("titulares", "Titulares interiores (%)", 70, 140, 5)):
             f = tk.Frame(self.t_letras.dentro, bg="#FFFFFF")
+            f.pack(fill="x", padx=8, pady=2)
+            tk.Label(f, text=nombre, bg="#FFFFFF", font=(F, 9)).pack(side="left")
+            sp = ttk.Spinbox(f, from_=de, to=a, increment=paso, width=7)
+            sp.set(d["tamanos"].get(clave))
+            sp.pack(side="right")
+            self.s_tam[clave] = sp
+        # portada: letras y tamaños de cada parte
+        P = self.t_portada.dentro
+        tk.Label(P, text="Tipografía de cada parte de la portada", bg="#FFFFFF", fg="#16324F",
+                 font=(F, 9, "bold")).pack(anchor="w", padx=8, pady=(6, 2))
+        for rol, (nombre, _) in diseno.ROLES_PORTADA.items():
+            tk.Label(P, text=nombre, bg="#FFFFFF", font=(F, 8, "bold"), fg="#374151").pack(anchor="w", padx=8, pady=(6, 0))
+            cb = ttk.Combobox(P, state="readonly", values=fams)
+            cb.set(d["fuentes"].get(rol, diseno.ROLES_PORTADA[rol][1]))
+            cb.pack(fill="x", padx=8)
+            self.c_fuentes[rol] = cb
+        tk.Label(P, text="Tamaños de letra de la portada", bg="#FFFFFF", fg="#16324F",
+                 font=(F, 9, "bold")).pack(anchor="w", padx=8, pady=(12, 2))
+        tk.Label(P, text="Los titulares se achican solos si no entran; este es su tamaño máximo.",
+                 bg="#FFFFFF", fg=MUTED, font=(F, 8), wraplength=300, justify="left").pack(anchor="w", padx=8)
+        for clave, nombre, de, a, paso in diseno.TAMANOS_PORTADA:
+            f = tk.Frame(P, bg="#FFFFFF")
             f.pack(fill="x", padx=8, pady=2)
             tk.Label(f, text=nombre, bg="#FFFFFF", font=(F, 9)).pack(side="left")
             sp = ttk.Spinbox(f, from_=de, to=a, increment=paso, width=7)
