@@ -144,6 +144,16 @@ Cada llamada a Claude (tokens de entrada y salida, duración, errores) queda en 
     guardar la vista previa se actualiza sola;
   - **clic derecho**: *Quitar del periódico* o *Poner en la portada como* Principal, Lateral,
     Destacada o Abajo 1-3;
+  - **＋ Añadir noticia aquí**: los espacios libres de cada página aparecen marcados en verde; con un
+    clic se elige una noticia (de las que no iban, de las ya publicadas o de todas) y se coloca en esa
+    página (la página se reacomoda sola);
+  - clic derecho → **Mover a la página…** fija en qué página va una noticia (y *Dejar que se ubique
+    sola* lo deshace);
+  - **🎨 Diseño**: panel con los **textos fijos** (lema, cinta, banda, pies, firma, índice, caja de
+    datos), los **colores** (principal, acento, alerta, texto y el de cada tema), las **tipografías**
+    de cada parte y los **tamaños**. Trae combinaciones listas (*Altiplano*, *Clásico sobrio*,
+    *Moderno*, *Alto contraste*) y *Volver al diseño original*. Se guarda en `data/diseno.json` y se
+    usa también al publicar;
   - **📰 Publicar este periódico** lo publica tal como se ve.
 - **📰 Generar periódico** lo genera de verdad y marca esas noticias como publicadas.
 - **Pestaña Portada**: 6 lugares (principal, lateral, destacada y tres abajo). En cada uno eliges la

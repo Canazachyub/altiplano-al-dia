@@ -26,8 +26,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Frame, Paragraph, Spacer, Table, TableStyle
 
-from . import storage
-from .config import ASSETS_DIR, CONSOLIDADOS_DIR
+from . import diseno, storage
+from .config import ASSETS_DIR, BASE_DIR, CONSOLIDADOS_DIR
 
 # ------------------------------------------------------------------ identidad visual
 AZUL = colors.HexColor("#043F9B")       # azul del logo
@@ -52,6 +52,41 @@ MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto
          "septiembre", "octubre", "noviembre", "diciembre"]
 
 
+D = diseno.cargar()
+MAQUETA_PATH = BASE_DIR / "data" / "maqueta.json"
+
+
+def _esc():
+    return float(D["tamanos"].get("titulares", 100)) / 100
+
+
+def leer_fijas() -> dict:
+    try:
+        import json as _j
+        return {int(k): int(v) for k, v in _j.loads(MAQUETA_PATH.read_text(encoding="utf-8")).get("fijas", {}).items()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def guardar_fijas(fijas: dict) -> None:
+    MAQUETA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MAQUETA_PATH.write_text(json.dumps({"fijas": {str(k): v for k, v in fijas.items()}}, indent=2), encoding="utf-8")
+
+
+def _aplicar_diseno():
+    """Carga data/diseno.json y aplica colores, letras y textos a toda la maqueta."""
+    global D, AZUL, AZUL_CLARO, AMARILLO, NEGRO, ROJO, FIN, CUADRITO
+    D = diseno.cargar()
+    c = D["colores"]
+    AZUL, AZUL_CLARO = colors.HexColor(c["principal"]), colors.HexColor(c["degradado"])
+    AMARILLO, NEGRO, ROJO = colors.HexColor(c["acento"]), colors.HexColor(c["texto"]), colors.HexColor(c["alerta"])
+    FIN = f'<font name="ZapfDingbats" size="6" color="{c["principal"]}"> n</font>'
+    CUADRITO = f'<font name="ZapfDingbats" size="6" color="{c["principal"]}">n</font> '
+    from . import portada
+    portada.D = D
+    diseno.aplicar_fuentes(D)
+
+
 def _fecha_larga(d: datetime) -> str:
     return f"{DIAS[d.weekday()]} {d.day} de {MESES[d.month - 1]} de {d.year}"
 
@@ -64,8 +99,12 @@ def _fecha(iso, fmt="%d/%m/%Y %H:%M"):
 
 
 # ------------------------------------------------------------------ fuentes
-@lru_cache(maxsize=1)
 def _fuentes():
+    diseno.aplicar_fuentes(D)
+    return True
+
+
+def _fuentes_viejo():  # (referencia: nombres de rol que usa la maqueta)
     d = ASSETS_DIR / "fonts"
     for nombre, archivo in (("Slab", "ZillaSlab-Bold.ttf"), ("Slab-Semi", "ZillaSlab-SemiBold.ttf"),
                             ("Serif", "PT_Serif-Web-Regular.ttf"), ("Serif-B", "PT_Serif-Web-Bold.ttf"),
@@ -84,13 +123,16 @@ def _fuentes():
 
 def _st():
     _fuentes()
+    t = D["tamanos"]
+    tx, an, pf = float(t["texto"]), float(t["antetitulo"]), float(t["pie_foto"])
     return {
-        "body": ParagraphStyle("body", fontName="Serif", fontSize=9, leading=11, alignment=TA_JUSTIFY,
-                               hyphenationLang="es", embeddedHyphenation=1, uriWasteReduce=0.3),
-        "inter": ParagraphStyle("inter", fontName="Serif-B", fontSize=9, leading=11, spaceBefore=3),
-        "kicker": ParagraphStyle("kicker", fontName="FC-B", fontSize=11, leading=12.5, textColor=NEGRO),
-        "kicker_s": ParagraphStyle("kicker_s", fontName="FC-B", fontSize=9.2, leading=10.5, textColor=NEGRO),
-        "caption": ParagraphStyle("caption", fontName="Narrow", fontSize=7.8, leading=9, textColor=colors.HexColor("#333333")),
+        "body": ParagraphStyle("body", fontName="Serif", fontSize=tx, leading=tx * 1.22, alignment=TA_JUSTIFY,
+                               hyphenationLang="es", embeddedHyphenation=1, uriWasteReduce=0.3, textColor=NEGRO),
+        "inter": ParagraphStyle("inter", fontName="Serif-B", fontSize=tx, leading=tx * 1.22, spaceBefore=3,
+                                textColor=NEGRO),
+        "kicker": ParagraphStyle("kicker", fontName="FC-B", fontSize=an, leading=an * 1.14, textColor=NEGRO),
+        "kicker_s": ParagraphStyle("kicker_s", fontName="FC-B", fontSize=an * 0.84, leading=an * 0.96, textColor=NEGRO),
+        "caption": ParagraphStyle("caption", fontName="Narrow", fontSize=pf, leading=pf * 1.15, textColor=colors.HexColor("#333333")),
         "byline": ParagraphStyle("byline", fontName="Serif-I", fontSize=7.5, leading=9, alignment=TA_RIGHT, textColor=NEGRO),
         "idx": ParagraphStyle("idx", fontName="Narrow", fontSize=8, leading=9.4, textColor=NEGRO),
         "idx_h": ParagraphStyle("idx_h", fontName="Narrow-B", fontSize=8, leading=10, textColor=AZUL),
@@ -229,15 +271,16 @@ def _titular_lineas(texto, ancho, tipo):
                 wa, wb = (pdfmetrics.stringWidth(a, "Slab", 10), pdfmetrics.stringWidth(b, "Slab", 10))
                 if mejor is None or max(wa, wb) < mejor[0]:
                     mejor = (max(wa, wb), [a, b])
-            size = min(42, ancho / mejor[0] * 10 * 0.99)
-            if size >= 24:
+            size = min(42 * _esc(), ancho / mejor[0] * 10 * 0.99)
+            if size >= 24 * _esc():
                 return size, mejor[1]
-        for size in range(34, 19, -1):
+        for size in range(int(34 * _esc()), int(19 * _esc()), -1):
             lineas = simpleSplit(texto, "Slab", size, ancho)
             if len(lineas) <= 3:
                 return size, lineas
-        return 20, simpleSplit(texto, "Slab", 20, ancho)
-    rango, maxl = ((26, 15), 3) if tipo == "sec" else ((19, 12), 5)
+        return int(20 * _esc()), simpleSplit(texto, "Slab", int(20 * _esc()), ancho)
+    rango, maxl = ((int(26 * _esc()), int(15 * _esc())), 3) if tipo == "sec" else \
+        ((int(19 * _esc()), int(12 * _esc())), 5)
     for size in range(rango[0], rango[1] - 1, -1):
         lineas = simpleSplit(texto, "Slab", size, ancho)
         if len(lineas) <= (2 if size > rango[0] - 4 else maxl):
@@ -273,9 +316,9 @@ def _layout(art, ancho, ncols, tipo, st, alto_cuerpo=None, foto_extra=0.0, secci
     d = 0.0
     # antetítulo
     ks = st["kicker"] if tipo != "side" else st["kicker_s"]
-    marca = '<font color="#C62828">ACTUALIZACIÓN · </font>' if art["act"] else ""
+    marca = f'<font color="{D["colores"]["alerta"]}">ACTUALIZACIÓN · </font>' if art["act"] else ""
     if seccion and art["ambito"] != seccion:
-        marca += f'<font color="#043F9B">{_x(art["ambito"])} · </font>'
+        marca += f'<font color="{D["colores"]["principal"]}">{_x(art["ambito"])} · </font>'
     if art["ante"] or marca:
         from .portada import color_hex
         ico = _img_tag(_icono("tema", art["tema"]), ks.fontSize + 1.5, -2.5)
@@ -313,7 +356,8 @@ def _layout(art, ancho, ncols, tipo, st, alto_cuerpo=None, foto_extra=0.0, secci
     firma_h = 0.0
     firma = None
     if tipo in ("lead", "sec"):
-        firma = Paragraph("<b>Redacción</b><br/>Altiplano al Día", st["byline"])
+        firma = Paragraph(f"<b>{_x(diseno.texto(D, 'firma_1'))}</b><br/>{_x(diseno.texto(D, 'firma_2'))}",
+                          st["byline"])
         _, firma_h = firma.wrap(cw, 50)
         firma_h += 6
 
@@ -406,7 +450,7 @@ def _caja_datos(arts, ancho, alto_max, st):
                 datos.append(_x(t))
     if not datos:
         return None
-    filas = [[Paragraph("DATOS CLAVE", st["box_h"])]]
+    filas = [[Paragraph(_x(diseno.texto(D, "datos")), st["box_h"])]]
     for t in datos:
         filas.append([Paragraph(CUADRITO + t, st["box"])])
     while len(filas) > 2:
@@ -454,12 +498,22 @@ class _Pagina:
         return self.main[0][0]["ambito"] if self.main else "NOTICIAS"
 
 
-def _paginar(arts, st):
+def _paginar(arts, st, fijas=None):
+    """fijas: {gid: página} elegidas en la vista previa ("Mover a la página", "Añadir aquí")."""
+    fijas = fijas or {}
     paginas = []
     cola = list(arts)
     while cola:
-        pg = _Pagina(len(paginas) + 2, portada=not paginas)   # la 1 es la portada
+        n = len(paginas) + 2                      # la 1 es la portada
+        pg = _Pagina(n, portada=not paginas)
         paginas.append(pg)
+        # las fijadas a esta página van primero; las fijadas a páginas siguientes esperan su turno
+        propias = [x for x in cola if fijas.get(x["gid"]) == n]
+        luego = [x for x in cola if fijas.get(x["gid"], 0) > n]
+        resto = [x for x in cola if x not in propias and x not in luego]
+        cola = propias + resto + luego
+        if not propias and not resto:             # solo quedan fijadas a páginas más adelante
+            cola = luego
         # nota principal de la página
         a = cola.pop(0)
         h, ops = _layout(a, pg.w_main, 3, "lead", st)
@@ -476,6 +530,8 @@ def _paginar(arts, st):
         while True:
             puesto = False
             for i, b in enumerate(cola[:8]):
+                if fijas.get(b["gid"], 0) > n:      # fijada a otra página más adelante
+                    continue
                 opciones = []
                 if not pg.portada:
                     hs, ops_s = _layout(b, CW, 1, "side", st, seccion=a["ambito"])
@@ -549,7 +605,7 @@ def _cabecera(c, pg, fecha_txt):
             dx = 22
         c.drawString(bx0 + 18 + dx, y + 7, secc)
         c.setFont("Narrow-B", 9)
-        c.drawRightString(bx1 - 8, y + 13, "Puno")
+        c.drawRightString(bx1 - 8, y + 13, diseno.texto(D, "ciudad"))
         c.setFont("Narrow", 8.5)
         c.drawRightString(bx1 - 8, y + 4, fecha_txt)
     else:
@@ -562,7 +618,7 @@ def _cabecera(c, pg, fecha_txt):
         c.drawString(bx1 - 12, y + 7, "/")
         c.setFillColor(colors.white)
         c.setFont("Narrow-B", 9)
-        c.drawString(bx0 + 8, y + 13, "Puno")
+        c.drawString(bx0 + 8, y + 13, diseno.texto(D, "ciudad"))
         c.setFont("Narrow", 8.5)
         c.drawString(bx0 + 8, y + 4, fecha_txt)
     # número de página
@@ -581,8 +637,10 @@ def _pie(c, numero):
     c.line(M, BOTTOM - 8, W - M, BOTTOM - 8)
     c.setFont("Narrow", 7)
     c.setFillColor(GRIS)
-    c.drawString(M, BOTTOM - 17, f"Altiplano al Día · Boletín N° {numero}")
-    c.drawRightString(W - M, BOTTOM - 17, "altiplano al día — noticias de Puno y la región")
+    ahora = datetime.now()
+    v = {"numero": numero, "fecha": f"{ahora:%d/%m/%Y}", "hora": f"{ahora:%H:%M}"}
+    c.drawString(M, BOTTOM - 17, diseno.texto(D, "pie_izq", **v))
+    c.drawRightString(W - M, BOTTOM - 17, diseno.texto(D, "pie_der", **v))
 
 
 def _portada_lateral(c, pg, arts, paginas_de, numero, ahora, st, anclas_links):
@@ -594,7 +652,7 @@ def _portada_lateral(c, pg, arts, paginas_de, numero, ahora, st, anclas_links):
     y -= lh + 10
     c.setFillColor(NEGRO)
     c.setFont("Narrow-B", 10.5)
-    c.drawCentredString(x + w / 2, y - 8, "Puno")
+    c.drawCentredString(x + w / 2, y - 8, diseno.texto(D, "ciudad"))
     c.setFont("Narrow", 9.5)
     c.drawCentredString(x + w / 2, y - 20, _fecha_larga(ahora))
     c.setFont("Narrow-B", 8.5)
@@ -615,16 +673,17 @@ def _portada_lateral(c, pg, arts, paginas_de, numero, ahora, st, anclas_links):
                 _, hh = hp.wrap(w, 100)
                 filas.append((hp, hh + 3, None))
                 alto += hh + 3
-            act = '<font color="#C62828"><b>ACT.</b></font> ' if a["act"] else ""
+            act = f'<font color="{D["colores"]["alerta"]}"><b>ACT.</b></font> ' if a["act"] else ""
             pgn = paginas_de.get(a["gid"], "")
-            p = Paragraph(f'<font name="Narrow-B" color="#043F9B">{pgn}</font>  {act}{_x(a["titular"])}', s)
+            p = Paragraph(f'<font name="Narrow-B" color="{D["colores"]["principal"]}">{pgn}</font>  '
+                          f'{act}{_x(a["titular"])}', s)
             _, hp_ = p.wrap(w, 200)
             filas.append((p, hp_ + 2.5, a["gid"]))
             alto += hp_ + 2.5
         return filas, alto
 
     cred = Paragraph(
-        f"Boletín elaborado por <b>Altiplano al Día</b> a partir del monitoreo de medios de la región. "
+        f"{_x(diseno.texto(D, 'credito', numero=numero))} "
         f"Generado el {ahora:%d/%m/%Y} a las {ahora:%H:%M}. {len(arts)} noticias "
         f"({sum(1 for a in arts if a['act'])} actualizaciones).", st["credito"])
     _, ch = cred.wrap(w, 100)
@@ -669,7 +728,7 @@ def _portada_lateral(c, pg, arts, paginas_de, numero, ahora, st, anclas_links):
     # "En esta edición"
     c.setFillColor(AZUL)
     c.setFont("Slab", 12)
-    c.drawString(x, y - 10, "En esta edición")
+    c.drawString(x, y - 10, diseno.texto(D, "indice"))
     c.setStrokeColor(AMARILLO)
     c.setLineWidth(2.5)
     c.line(x, y - 14, x + w, y - 14)
@@ -716,7 +775,7 @@ def _ficha(c, arts, paginas_de, numero, st):
             story.append(Paragraph(" · ".join(partes), st["v"]))
         for d in nota.get("DISCREPANCIAS") or []:
             vers = "; ".join(f"<b>{_x(v.get('medio', ''))}</b>: {_x(v.get('dice', ''))}" for v in d.get("versiones", []))
-            story.append(Paragraph(f'<font color="#C62828"><b>Difieren:</b></font> {_x(d.get("aspecto", ""))} — {vers}',
+            story.append(Paragraph(f'<font color="{D["colores"]["alerta"]}"><b>Difieren:</b></font> {_x(d.get("aspecto", ""))} — {vers}',
                                    st["v"]))
     while story:
         c.showPage()
@@ -736,6 +795,12 @@ def _ordenar(arts, cfg):
         return -(a["n_medios"] * 300 + (150 if a["img"] else 0) + min(a["palabras"], 400))
 
     return sorted(arts, key=lambda a: (amb.get(a["ambito"], 99), peso(a)))
+
+
+def _hueco(pag, rect):
+    from . import portada
+    if portada.ZONAS is not None:
+        portada.ZONAS.append({"pag": pag, "gid": None, "rect": [round(v, 1) for v in rect], "lugar": "hueco"})
 
 
 def _zona(pag, a, rect):
@@ -758,7 +823,7 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
     from . import portada
     portada.dibujar(c, cfg, arts, paginas_de, numero, ahora, {
         "AZUL": AZUL, "AZUL_CLARO": AZUL_CLARO, "AMARILLO": AMARILLO, "NEGRO": NEGRO, "W": W, "H": H,
-        "recorte": _recorte, "icono": _icono, "logo": _logo, "logo_blanco": _logo_blanco, "fecha_larga": _fecha_larga, "plano": _plano})
+        "recorte": _recorte, "icono": _icono, "logo": _logo, "logo_blanco": _logo_blanco, "ROJO": ROJO, "fecha_larga": _fecha_larga, "plano": _plano})
     for pg in paginas:
         c.showPage()
         if pg.portada:
@@ -790,6 +855,11 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
                 if caja:
                     tb, th = caja
                     tb.drawOn(c, x, y - GAP - th)
+                    y -= th + GAP
+            if not (pg.portada and pila is pg.lat):
+                y_hueco = y - (GAP if pila else 0)
+                if y_hueco - BOTTOM > 70:
+                    _hueco(pg.n, (x, BOTTOM + 4, x + ancho, y_hueco))
         if pg.lat and not pg.portada:
             xr = pg.x_main + pg.w_main + GUT / 2 if not pg.lateral_izq else pg.x_main - GUT / 2
             _filete_v(c, xr, BOTTOM, pg.top)
@@ -804,11 +874,12 @@ def generar_consolidado(cfg: dict, grupos=None, destino=None, registrar=True):
     grupos = list(grupos if grupos is not None else storage.grupos_para_pdf())
     if not grupos:
         return None
+    _aplicar_diseno()
     st = _st()
     arts = _ordenar([_articulo(g, cfg) for g in grupos], cfg)
     numero = storage.siguiente_consolidado()
     ahora = datetime.now()
-    paginas = _paginar(arts, st)
+    paginas = _paginar(arts, st, leer_fijas())
     if destino is None:
         CONSOLIDADOS_DIR.mkdir(parents=True, exist_ok=True)
         destino = CONSOLIDADOS_DIR / f"{ahora:%Y-%m-%d_%H%M}.pdf"

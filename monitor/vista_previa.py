@@ -1,4 +1,4 @@
-"""Vista previa interactiva del periódico, dentro de la app.
+"""Vista previa interactiva del periódico, dentro de la app (la mesa de trabajo editorial).
 
 Muestra las páginas del PDF que se va a publicar. Clic en una noticia: se abre su editor (texto,
 foto, titular de portada) y al guardar la vista se actualiza sola. Clic derecho: quitarla del
@@ -9,12 +9,13 @@ import os
 import threading
 import tkinter as tk
 from datetime import datetime
-from tkinter import ttk
+from tkinter import messagebox, simpledialog, ttk
 
 import pypdfium2 as pdfium
 from PIL import ImageTk
 
-from . import portada, storage
+from . import consolidado, portada, storage
+from .gui_diseno import PanelDiseno
 from .config import BASE_DIR
 
 F = "Segoe UI"
@@ -59,8 +60,12 @@ class VistaPrevia(tk.Toplevel):
         sb.pack(side="right", fill="y")
         self.lista.pack(fill="both", expand=True)
         self.lista.bind("<MouseWheel>", lambda e: self.lista.yview_scroll(-e.delta // 120, "units"))
+        # diseño (a la derecha, se muestra con el botón 🎨)
+        self.panel_diseno = PanelDiseno(cuerpo, self._tras_diseno)
+        self._diseno_visible = False
         # página
         centro = tk.Frame(cuerpo, bg="#E9EDF4")
+        self._centro = centro
         centro.pack(side="left", fill="both", expand=True)
         self.cv = tk.Canvas(centro, bg="#9AA5B4", highlightthickness=0, cursor="arrow")
         vs = ttk.Scrollbar(centro, orient="vertical", command=self.cv.yview)
@@ -97,6 +102,7 @@ class VistaPrevia(tk.Toplevel):
         ttk.Button(b, text="Abrir en visor PDF", style="Header.TButton",
                    command=lambda: self.ruta and os.startfile(str(self.ruta))).pack(side="right", padx=4)  # noqa: S606
         ttk.Button(b, text="⟳ Actualizar", style="Header.TButton", command=self.generar).pack(side="right", padx=4)
+        ttk.Button(b, text="🎨 Diseño", style="Header.TButton", command=self._toggle_diseno).pack(side="right", padx=4)
         ttk.Button(b, text="Ajustar", style="Header.TButton", command=lambda: self._zoom(None)).pack(side="right", padx=4)
         ttk.Button(b, text="+", width=3, style="Header.TButton", command=lambda: self._zoom(+1)).pack(side="right")
         ttk.Button(b, text="−", width=3, style="Header.TButton", command=lambda: self._zoom(-1)).pack(side="right", padx=4)
@@ -106,8 +112,9 @@ class VistaPrevia(tk.Toplevel):
         ttk.Button(b, text="◀", width=3, style="Header.TButton", command=lambda: self.ir(self.pagina - 1)).pack(side="right", padx=4)
         h = tk.Frame(self, bg="#E8F0FE")
         h.pack(fill="x")
-        tk.Label(h, text="Pasa el mouse sobre una noticia para verla marcada.   Clic: editar texto, foto y titular "
-                         "de portada.   Clic derecho: quitarla del periódico o ponerla en la portada.",
+        tk.Label(h, text="Clic en una noticia: editar texto, foto y titular.   Clic derecho: quitar, mover a otra "
+                         "página o a la portada.   Clic en «＋ Añadir noticia aquí»: llenar un espacio libre.   "
+                         "🎨 Diseño: textos, colores y letras.",
                  bg="#E8F0FE", fg="#1D4ED8", font=(F, 9)).pack(side="left", padx=14, pady=4)
 
     # ------------------------------------------------------------------ generar y cargar
@@ -207,6 +214,17 @@ class VistaPrevia(tk.Toplevel):
         self.cv.create_image(self.ox, self.oy, image=self._img, anchor="nw", tags="pagina")
         self.cv.configure(scrollregion=(0, 0, cw, im.height + 24))
         self.lbl_pag.configure(text=f"  Página {self.pagina + 1} de {len(self.doc)}  ")
+        self.cv.delete("hueco")
+        alto = self.mapa.get("alto", 842)
+        for z in self.mapa.get("zonas", []):
+            if z["pag"] == self.pagina + 1 and z.get("lugar") == "hueco":
+                x0, y0, x1, y1 = z["rect"]
+                X0, Y0, X1, Y1 = (self.ox + x0 * s, self.oy + (alto - y1) * s, self.ox + x1 * s, self.oy + (alto - y0) * s)
+                self.cv.create_rectangle(X0 + 3, Y0 + 3, X1 - 3, Y1 - 3, outline="#16A34A", width=2, dash=(5, 4),
+                                         fill="#F0FDF4", stipple="gray25", tags="hueco")
+                self.cv.create_text((X0 + X1) / 2, (Y0 + Y1) / 2, text="＋ Añadir noticia aquí",
+                                    fill="#15803D", font=(F, max(8, int(11 * s)), "bold"), tags="hueco",
+                                    width=max(40, X1 - X0 - 16), justify="center")
         self.lista.itemconfigure("marco", outline="#DDE3EC")
         for it in self.lista.find_withtag(f"t{self.pagina}"):
             if "marco" in self.lista.gettags(it):
@@ -248,7 +266,8 @@ class VistaPrevia(tk.Toplevel):
         s = self._escala()
         x = (self.cv.canvasx(e.x) - self.ox) / s
         y = self.mapa.get("alto", 842) - (self.cv.canvasy(e.y) - self.oy) / s
-        for z in self.mapa.get("zonas", []):
+        zonas = sorted(self.mapa.get("zonas", []), key=lambda z: z.get("lugar") == "hueco")   # noticias primero
+        for z in zonas:
             if z["pag"] == self.pagina + 1:
                 x0, y0, x1, y1 = z["rect"]
                 if x0 <= x <= x1 and y0 <= y <= y1:
@@ -272,9 +291,12 @@ class VistaPrevia(tk.Toplevel):
                                  self.ox + x1 * s + 3, self.oy + (alto - y0) * s + 3,
                                  outline="#2563EB", width=3, dash=(6, 3), tags="zona")
         self.cv.configure(cursor="hand2")
-        tit = self.mapa.get("titulares", {}).get(str(z["gid"]), "")
-        lugar = dict(portada.LUGARES).get(z.get("lugar"), "")
-        self.tip.configure(text=(f"Portada · {lugar}:  " if lugar else "") + tit[:90] + "   (clic para editar)")
+        if z.get("lugar") == "hueco":
+            self.tip.configure(text="Espacio libre: clic para añadir una noticia en esta página")
+        else:
+            tit = self.mapa.get("titulares", {}).get(str(z["gid"]), "")
+            lugar = dict(portada.LUGARES).get(z.get("lugar"), "")
+            self.tip.configure(text=(f"Portada · {lugar}:  " if lugar else "") + tit[:90] + "   (clic para editar)")
         if e is not None:
             self.tip.place(x=e.x + 16, y=e.y + 14)
 
@@ -283,7 +305,11 @@ class VistaPrevia(tk.Toplevel):
 
     def _clic(self, e):
         z = self._zona_en(e)
-        if z:
+        if not z:
+            return
+        if z.get("lugar") == "hueco":
+            ElegirNoticia(self, z["pag"])
+        else:
             self._editar(z["gid"])
 
     def _editar(self, gid):
@@ -299,6 +325,9 @@ class VistaPrevia(tk.Toplevel):
         z = self._zona_en(e)
         if not z:
             return
+        if z.get("lugar") == "hueco":
+            ElegirNoticia(self, z["pag"])
+            return
         gid = z["gid"]
         tit = self.mapa.get("titulares", {}).get(str(gid), "")[:60]
         m = tk.Menu(self, tearoff=0)
@@ -308,6 +337,9 @@ class VistaPrevia(tk.Toplevel):
         for lugar, nombre in portada.LUGARES:
             sub.add_command(label=nombre, command=lambda lg=lugar: self._a_portada(gid, lg))
         m.add_cascade(label="★  Poner en la portada como", menu=sub)
+        m.add_command(label="📄  Mover a la página…", command=lambda: self._mover_pagina(gid))
+        if gid in consolidado.leer_fijas():
+            m.add_command(label="↺  Dejar que se ubique sola", command=lambda: self._soltar(gid))
         m.tk_popup(e.x_root, e.y_root)
 
     def _quitar(self, gid):
@@ -323,6 +355,51 @@ class VistaPrevia(tk.Toplevel):
         lugares[lugar] = gid
         portada.guardar_lugares(lugares)
         self.app._aviso(f"Noticia puesta en la portada: {dict(portada.LUGARES)[lugar]}.", "ok")
+        self.generar()
+
+    def _mover_pagina(self, gid):
+        total = len(self.doc) if self.doc else 30
+        n = simpledialog.askinteger("Mover a la página", f"¿En qué página va esta noticia? (2 a {total})",
+                                    parent=self, minvalue=2, maxvalue=60)
+        if not n:
+            return
+        fijas = consolidado.leer_fijas()
+        fijas[gid] = n
+        consolidado.guardar_fijas(fijas)
+        self.app._aviso(f"La noticia irá en la página {n} (si entra; si no, en la siguiente con espacio).", "ok")
+        self.pagina = max(0, n - 1)
+        self.generar()
+
+    def _soltar(self, gid):
+        fijas = consolidado.leer_fijas()
+        fijas.pop(gid, None)
+        consolidado.guardar_fijas(fijas)
+        self.generar()
+
+    def anadir(self, gid, pag):
+        """Pone una noticia en el periódico, en la página pag (desde un espacio libre)."""
+        g = storage.get_grupo(gid)
+        if g["estado_pdf"] not in ("nuevo", "actualizacion"):
+            storage.actualizar_grupo(gid, estado_pdf="nuevo")      # ya publicada: vuelve a salir
+        storage.set_en_periodico([gid], True)
+        fijas = consolidado.leer_fijas()
+        fijas[gid] = pag
+        consolidado.guardar_fijas(fijas)
+        self.app._refresh_dashboard()
+        self.app._aviso(f"Noticia añadida en la página {pag}.", "ok")
+        self.pagina = max(0, pag - 1)
+        self.generar()
+
+    def _toggle_diseno(self):
+        if self._diseno_visible:
+            self.panel_diseno.pack_forget()
+        else:
+            self.panel_diseno.pack(side="right", fill="y", before=self._centro)
+        self._diseno_visible = not self._diseno_visible
+        self.after(80, self._mostrar)
+
+    def _tras_diseno(self, msg):
+        self.app._aviso(msg + " Actualizando la vista previa…", "ok")
         self.generar()
 
     # ------------------------------------------------------------------ otros
@@ -359,3 +436,84 @@ class VistaPrevia(tk.Toplevel):
         self.lift()
         self.focus_force()
         self.generar()
+
+
+class ElegirNoticia(tk.Toplevel):
+    """Lista de noticias para llenar un espacio libre de la página."""
+
+    FILTROS = ["Que no van (☐ No va)", "Ya publicadas", "Todas"]
+
+    def __init__(self, vista, pag):
+        super().__init__(vista)
+        self.vista, self.pag = vista, pag
+        self.title(f"Añadir una noticia en la página {pag}")
+        self.geometry("900x560")
+        self.transient(vista)
+        top = ttk.Frame(self, padding=10)
+        top.pack(fill="x")
+        ttk.Label(top, text="Mostrar:").pack(side="left")
+        self.filtro = ttk.Combobox(top, state="readonly", values=self.FILTROS, width=24)
+        self.filtro.set(self.FILTROS[0])
+        self.filtro.pack(side="left", padx=(4, 12))
+        self.filtro.bind("<<ComboboxSelected>>", lambda e: self._cargar())
+        ttk.Label(top, text="Buscar:").pack(side="left")
+        self.q = ttk.Entry(top, width=32)
+        self.q.pack(side="left", padx=4)
+        self.q.bind("<KeyRelease>", lambda e: self._cargar())
+        cols = ("fecha", "titular", "medios", "estado")
+        self.tree = ttk.Treeview(self, columns=cols, show="headings", selectmode="browse")
+        for c, t, w in (("fecha", "Fecha", 90), ("titular", "Titular", 470), ("medios", "Medios", 170),
+                        ("estado", "Estado", 110)):
+            self.tree.heading(c, text=t)
+            self.tree.column(c, width=w, stretch=(c == "titular"))
+        sb = ttk.Scrollbar(self, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        pie = ttk.Frame(self, padding=10)
+        pie.pack(side="bottom", fill="x")
+        sb.pack(side="right", fill="y")
+        self.tree.pack(fill="both", expand=True, padx=(10, 0))
+        self.tree.bind("<Double-1>", lambda e: self._ok())
+        ttk.Button(pie, text=f"＋ Añadir en la página {pag}", style="Accent.TButton", command=self._ok).pack(side="right")
+        ttk.Button(pie, text="Cancelar", command=self.destroy).pack(side="right", padx=6)
+        ttk.Label(pie, text="Doble clic para añadir. Si no entra en el espacio, pasa a la página siguiente.",
+                  foreground="#6B7280").pack(side="left")
+        self._cargar()
+        self.grab_set()
+
+    def _cargar(self):
+        f = self.filtro.get()
+        q = self.q.get().strip().lower()
+        with storage._conn() as c:
+            filas = c.execute("SELECT * FROM grupos WHERE nota_json IS NOT NULL AND estado_pdf != 'descartado' "
+                              "ORDER BY COALESCE(fecha_hecho, actualizado) DESC").fetchall()
+        self.tree.delete(*self.tree.get_children())
+        for g in filas:
+            pendiente = g["estado_pdf"] in ("nuevo", "actualizacion")
+            va = (g["en_periodico"] if g["en_periodico"] is not None else 1) == 1
+            if pendiente and va:
+                continue                                   # ya está en este periódico
+            if f == self.FILTROS[0] and not (pendiente and not va):
+                continue
+            if f == self.FILTROS[1] and pendiente:
+                continue
+            if q and q not in (g["titular"] or "").lower():
+                continue
+            estado = "No va" if pendiente else f"Publicada N° {g['ultimo_pdf']}"
+            fecha = (g["fecha_hecho"] or g["actualizado"] or "")[:16].replace("T", " ")
+            self.tree.insert("", "end", iid=str(g["id"]), values=(fecha[5:], g["titular"], g["medios"], estado))
+        if not self.tree.get_children():
+            self.tree.insert("", "end", iid="vacio", values=("", "No hay noticias con este filtro. Prueba «Todas».",
+                                                             "", ""))
+
+    def _ok(self):
+        s = self.tree.selection()
+        if not s or not s[0].isdigit():
+            return
+        gid = int(s[0])
+        g = storage.get_grupo(gid)
+        if g["estado_pdf"] not in ("nuevo", "actualizacion") and not messagebox.askyesno(
+                "Noticia ya publicada", f"Esta noticia ya salió en el N° {g['ultimo_pdf']}. "
+                                        "¿Publicarla otra vez en este periódico?", parent=self):
+            return
+        self.destroy()
+        self.vista.anadir(gid, self.pag)
