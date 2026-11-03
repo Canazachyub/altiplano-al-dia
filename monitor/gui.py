@@ -608,6 +608,7 @@ class App(tk.Tk):
 
     # ================================================================== revisión
     def _schedule(self, initial=False):
+        self._pintar_auto()
         if initial and not PROFILE_DIR.exists():
             self.next_check = None
             self.status.set("Primer uso: Configuración → 'Iniciar sesión en Facebook', luego 'Revisar ahora'.")
@@ -987,8 +988,8 @@ class App(tk.Tk):
         self.lbl_va.configure(text=f"{len(listos)} noticia(s) irán en el próximo periódico")
         if not self.gtree.get_children() and self.d_mostrar.get() != "Todas":
             self.gtree.insert("", "end", iid="vacio", values=(
-                "", "", "", "No hay noticias pendientes con estos filtros. Las ya publicadas se ven con "
-                "«Mostrar: Todas»; llegan noticias nuevas en cada revisión.", "", "", "", ""))
+                "", "", "", "Sin noticias pendientes. Para ver las publicadas: Mostrar → Todas.",
+                "", "", "", ""))
 
     def _chip(self, tema):
         self.d_tema.set(tema if self.d_tema.get() != tema else "Todos")
