@@ -60,6 +60,7 @@ if errorlevel 1 (
   echo  ERROR: fallo la instalacion de dependencias.
   pause & exit /b 1
 )
+copy /y requirements.txt ".venv\requirements.instalado" >nul
 
 rem --- 3. Navegador: Chrome o Edge (viene con Windows). Si no hay ninguno, Chromium de Playwright.
 set "HAYNAV="
