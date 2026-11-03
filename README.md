@@ -35,6 +35,17 @@ Necesita internet durante la instalación (unos 150 MB entre Python y las depend
 
 ## Uso
 
+La app abre en **🏠 Inicio**, que muestra el trabajo en 4 pasos con su estado y marca el
+**👉 siguiente paso**:
+
+1. **Buscar noticias**: *Revisar ahora* (o F5) y la revisión automática (pausar/activar).
+2. **Elegir cuáles van**: lleva a **🗂 Noticias**, donde se marca ☑/☐ y se edita cada nota.
+3. **Revisar el periódico**: abre la vista previa interactiva o **📰 Portada**.
+4. **Publicar**: genera el PDF final.
+
+Si falta algo para empezar (API keys, sesión de Facebook, páginas activas), Inicio lo muestra
+arriba en amarillo con el botón para resolverlo. Al pasar el mouse sobre un botón aparece qué hace.
+
 - **Páginas**: escribe la URL o el nombre (`radiopachamama`) y pulsa *Agregar*. *Activar/Pausar*
   la excluye de las revisiones sin borrarla (● activa, ○ pausada). Todo se guarda en `config.json`.
 - **Intervalo**: por defecto 30 min; cámbialo y pulsa *Aplicar*.

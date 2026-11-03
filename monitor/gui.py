@@ -13,6 +13,7 @@ from .analisis import ciclo_fase2, fase2_lock
 from .config import (BASE_DIR, EXCEL_PATH, PROFILE_DIR, get_api_key, load_config, nombre_medio,
                      normalize_page_url, page_slug, save_config, set_api_key)
 from .editor import EditorNota
+from .gui_inicio import InicioTab, Tip
 from .gui_portada import PortadaTab
 from .proceso import cerrar_navegador_monitor
 from .vista_previa import VistaPrevia
@@ -122,10 +123,15 @@ class App(tk.Tk):
         self._build_bandeja()
         self._build_dashboard()
         self.portada_tab = PortadaTab(self.nb, self)
-        self.nb.add(self.portada_tab, text="  Portada  ")
+        self.nb.add(self.portada_tab, text="  📰 Portada  ")
         self._build_config()
         self._build_statusbar()
+        self.inicio = InicioTab(self.nb, self)
+        self.nb.insert(0, self.inicio, text="  🏠 Inicio  ")
+        self.nb.select(self.inicio)
         self.nb.bind("<<NotebookTabChanged>>", self._tab_cambiada)
+        self.bind_all("<F5>", lambda e: self.check_now())
+        self._ayudas()
 
         self._load_pages()
         self._load_posts()
@@ -136,6 +142,17 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._cerrar)
         self._cerrando = False
         self._ventana_previa = None
+
+    def _ayudas(self):
+        Tip(self.btn_fase2, "Cruza las noticias nuevas entre medios y escribe las notas con Claude. "
+                            "Normalmente se hace solo al final de cada revisión.")
+        Tip(self.btn_auto, "Prende o apaga la revisión automática cada cierto tiempo.")
+        Tip(self.btn_now, "Busca noticias nuevas en Facebook ahora (atajo: F5).")
+        Tip(self.btn_stop, "Corta la revisión en curso y cierra el navegador. Lo leído queda guardado.")
+
+    def _refrescar_inicio(self):
+        if hasattr(self, "inicio"):
+            self.inicio.refrescar()
 
     # ================================================================== cierre
     def _cerrar(self):
@@ -214,7 +231,7 @@ class App(tk.Tk):
         right.pack(side="right", padx=14)
         self.chip = tk.Label(right, text="● En espera", bg=NAVY, fg="#9FE2B0", font=(F, 9, "bold"))
         self.chip.pack(side="left", padx=(0, 14))
-        self.btn_fase2 = ttk.Button(right, text="⟳ Analizar y cruzar", style="Header.TButton",
+        self.btn_fase2 = ttk.Button(right, text="⟳ Agrupar noticias", style="Header.TButton",
                                     command=lambda: self._run_fase2(False))
         self.btn_fase2.pack(side="left", padx=4)
         self.btn_auto = ttk.Button(right, text="", style="Header.TButton", command=self._toggle_auto)
@@ -248,7 +265,8 @@ class App(tk.Tk):
     # ================================================================== pestaña Bandeja
     def _build_bandeja(self):
         tab = ttk.Frame(self.nb, padding=10)
-        self.nb.add(tab, text="  Bandeja  ")
+        self.nb.add(tab, text="  📥 Bandeja  ")
+        self.tab_bandeja = tab
         bar = ttk.Frame(tab)
         bar.pack(fill="x", pady=(0, 8))
         ttk.Label(bar, text="Buscar:").pack(side="left")
@@ -303,7 +321,8 @@ class App(tk.Tk):
     # ================================================================== pestaña Dashboard
     def _build_dashboard(self):
         tab = ttk.Frame(self.nb, padding=10)
-        self.nb.add(tab, text="  Dashboard  ")
+        self.nb.add(tab, text="  🗂 Noticias  ")
+        self.tab_dash = tab
 
         # tarjetas por ámbito
         self.cards_frame = ttk.Frame(tab)
@@ -408,7 +427,8 @@ class App(tk.Tk):
     # ================================================================== pestaña Configuración
     def _build_config(self):
         tab = ttk.Frame(self.nb, padding=12)
-        self.nb.add(tab, text="  Configuración  ")
+        self.nb.add(tab, text="  ⚙ Configuración  ")
+        self.tab_config = tab
         tab.columnconfigure(0, weight=1)
         tab.columnconfigure(1, weight=1)
         tab.columnconfigure(2, weight=1)
@@ -640,6 +660,7 @@ class App(tk.Tk):
             self.next_check = None
             self._aviso("Revisión automática pausada. Solo se revisará al pulsar «Revisar ahora».", "warn")
         self._pintar_auto()
+        self._refrescar_inicio()
 
     def _detener(self):
         if not self.running and not fase2_lock.locked():
@@ -656,6 +677,7 @@ class App(tk.Tk):
             b.state(["disabled"] if busy else ["!disabled"])
         self.chip.configure(text=f"● {texto or ('Trabajando…' if busy else 'En espera')}",
                             fg="#FFD27A" if busy else "#9FE2B0")
+        self.after(50, self._refrescar_inicio)
         if busy:
             self.btn_stop.state(["!disabled"])
             self.btn_stop.pack(side="left", padx=4)
@@ -748,6 +770,8 @@ class App(tk.Tk):
         last = self.last_check.strftime("%d/%m %H:%M") if self.last_check else "—"
         err = f"   ⚠ {self.last_error[:90]}" if self.last_error else ""
         self.sched.set(f"Última revisión: {last}   ·   Próxima: {nxt}{err}")
+        if datetime.now().second % 10 == 0 and hasattr(self, "inicio") and self.nb.select() == str(self.inicio):
+            self.inicio.refrescar()
         self.after(1000, self._tick)
 
     def _poll_queue(self):
@@ -988,6 +1012,7 @@ class App(tk.Tk):
             self.gtree.selection_set(sel[0])
         listos = storage.grupos_para_pdf()
         self.lbl_va.configure(text=f"{len(listos)} noticia(s) irán en el próximo periódico")
+        self._refrescar_inicio()
         if not self.gtree.get_children() and self.d_mostrar.get() != "Todas":
             self.gtree.insert("", "end", iid="vacio", values=(
                 "", "", "", "Sin noticias pendientes. Para ver las publicadas: Mostrar → Todas.",
@@ -1113,6 +1138,8 @@ class App(tk.Tk):
     def _tab_cambiada(self, _e=None):
         if self.nb.select() == str(self.portada_tab):
             self.portada_tab.recargar()
+        elif hasattr(self, "inicio") and self.nb.select() == str(self.inicio):
+            self.inicio.refrescar()
 
     def _editar(self):
         gid = self._gid_sel()
