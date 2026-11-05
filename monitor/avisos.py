@@ -86,11 +86,13 @@ class Asignador:
         self.rotacion = [a for a in self.d["avisos"] if a.get("auto") and listo(a)]
         self.i = 0
 
-    def para(self, clave: str, alto: float):
+    def para(self, clave: str, alto: float, ancho: float | None = None):
+        """ancho (opcional): en un espacio ancho (zona principal) entra un aviso apaisado más bajo."""
         if clave in self.d["colocados"]:
             a = por_id(self.d, self.d["colocados"][clave])
             return (a, True) if a and listo(a) else (None, True)
-        if not self.d.get("auto") or not self.rotacion or alto < 90:
+        minimo = 60 if (ancho or 0) >= 300 else 90
+        if not self.d.get("auto") or not self.rotacion or alto < minimo:
             return None, False
         a = self.rotacion[self.i % len(self.rotacion)]
         self.i += 1
@@ -113,6 +115,44 @@ def _ajustar(texto, font, ancho, maxsize, minsize, maxlineas):
             return s, lineas
         s -= 0.5
     return minsize, simpleSplit(texto, font, minsize, ancho)[:maxlineas]
+
+
+def _dibujar_apaisado(c, a, x0, y0, w, h, ico, acento):
+    pad = 14
+    x = x0 + pad
+    s_ico = min(h - 2 * pad, 40) if ico and h > 50 else 0
+    if s_ico:
+        c.drawImage(ico, x, y0 + (h - s_ico) / 2, s_ico, s_ico, mask="auto")
+        x += s_ico + 10
+    sp, lp = _ajustar(a.get("telefono") or "", "P-Banda", w * 0.34, min(26, h * 0.42), 9, 1)
+    wp = max([pdfmetrics.stringWidth(x_, "P-Banda", sp) for x_ in lp] or [0])
+    ancho = max(40, x0 + w - pad - wp - 14 - x)
+    st, lt = _ajustar((a.get("titulo") or "").upper(), "P-Banda", ancho, min(18, h * 0.3), 8, 2)
+    sm, lm = _ajustar(a.get("mensaje") or "", "P-Ante", ancho, 10, 7, 2)
+    total = len(lt) * st * 1.05 + 4 + len(lm) * sm * 1.2
+    if total > h - 16:                       # no entra: se achica todo junto
+        f = (h - 16) / total
+        st, sm = st * f, sm * f
+        lt = simpleSplit((a.get("titulo") or "").upper(), "P-Banda", st, ancho)[:2]
+        lm = simpleSplit(a.get("mensaje") or "", "P-Ante", sm, ancho)[:2]
+        total = len(lt) * st * 1.05 + 4 + len(lm) * sm * 1.2
+    y = y0 + h / 2 + total / 2
+    c.setFillColor(colors.white)
+    for ln in lt:
+        y -= st
+        c.setFont("P-Banda", st)
+        c.drawString(x, y, ln)
+        y -= st * 0.05
+    y -= 4
+    for ln in lm:
+        y -= sm
+        c.setFont("P-Ante", sm)
+        c.drawString(x, y, ln)
+        y -= sm * 0.2
+    c.setFillColor(acento)
+    for ln in lp:
+        c.setFont("P-Banda", sp)
+        c.drawRightString(x0 + w - pad, y0 + h / 2 - sp * 0.35, ln)
 
 
 def dibujar(c, a: dict, rect, D: dict):
@@ -141,6 +181,10 @@ def dibujar(c, a: dict, rect, D: dict):
     pad = 10
     ancho = w - 2 * pad
     ico = _icono(a.get("icono", ""))
+    if w >= 2.6 * h:              # espacio apaisado (zona principal): icono | título y mensaje | número
+        _dibujar_apaisado(c, a, x0, y0, w, h, ico, acento)
+        c.restoreState()
+        return
     s_ico = min(ancho * 0.32, h * 0.22, 46) if ico and h > 120 else 0
     st, lt = _ajustar((a.get("titulo") or "").upper(), "P-Banda", ancho, min(22, ancho / 5.5), 8, 3)
     sm, lm = _ajustar(a.get("mensaje") or "", "P-Ante", ancho, 11, 7, 4)

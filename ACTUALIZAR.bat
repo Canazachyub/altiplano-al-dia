@@ -51,7 +51,7 @@ mkdir "%TMPZ%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol='Tls12'; $ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing 'https://github.com/Canazachyub/altiplano-al-dia/archive/refs/heads/main.zip' -OutFile '%TMPZ%\main.zip'; Expand-Archive '%TMPZ%\main.zip' '%TMPZ%' -Force"
 if not exist "%TMPZ%\altiplano-al-dia-main\main.py" goto error_zip
 rem robocopy copia el programa sin tocar los datos del usuario
-robocopy "%TMPZ%\altiplano-al-dia-main" "%APP%." /E /NFL /NDL /NJH /NJS /NP /XD .venv python data fb_profile pdfs .git /XF .env config.json noticias*.xlsx >nul
+robocopy "%TMPZ%\altiplano-al-dia-main" "%APP%." /E /NFL /NDL /NJH /NJS /NP /XD .venv python data fb_profile pdfs .git /XF .env config.json* noticias*.xlsx >nul
 if errorlevel 8 goto error_copia
 if not exist "config.json" copy "%TMPZ%\altiplano-al-dia-main\config.json" "config.json" >nul
 rmdir /s /q "%TMPZ%"

@@ -79,8 +79,16 @@ class PanelRegistro(tk.Frame):
         if not LOG_PATH.exists():
             return
         try:
-            with LOG_PATH.open("r", encoding="utf-8", errors="replace") as f:
-                lineas = f.readlines()[-600:]
+            # solo la cola del archivo (el log crece sin límite: leerlo entero hacía lento el arranque)
+            with LOG_PATH.open("rb") as f:
+                f.seek(0, os.SEEK_END)
+                tam = f.tell()
+                f.seek(max(0, tam - 400_000))
+                datos = f.read()
+            lineas = datos.decode("utf-8", errors="replace").splitlines(True)
+            if tam > 400_000:
+                lineas = lineas[1:]          # la primera puede venir cortada a la mitad
+            lineas = lineas[-600:]
         except OSError:
             return
         for ln in lineas:

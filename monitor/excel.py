@@ -2,6 +2,7 @@
 from datetime import datetime
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -38,7 +39,8 @@ def _hoja(ws, headers, filas, anchos, link_cols=(), wrap_cols=()):
         c.fill = AZUL
         c.alignment = Alignment(vertical="center", wrap_text=True)
     for fila in filas:
-        ws.append(fila)
+        # caracteres de control (vienen a veces en textos de FB) hacen fallar a openpyxl
+        ws.append([ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v for v in fila])
     for i, w in enumerate(anchos, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     for row in ws.iter_rows(min_row=2):

@@ -82,7 +82,10 @@ def generar_pdf(post: dict, ia: dict) -> Path:
         elif par:
             s.append(Paragraph(_limpio(par), st["body"]))
 
-    datos = [d for d in ia.get("DATOS") or [] if str(d).strip()]
+    datos = ia.get("DATOS") or []
+    if isinstance(datos, str):      # si la IA devuelve un texto en vez de lista, no iterar letra por letra
+        datos = datos.splitlines()
+    datos = [d for d in datos if str(d).strip()]
     s.append(Paragraph("DATOS O CIFRAS IMPORTANTES", st["h"]))
     if datos:
         s.append(ListFlowable([ListItem(Paragraph(_limpio(str(d)), st["body"])) for d in datos],
@@ -91,11 +94,12 @@ def generar_pdf(post: dict, ia: dict) -> Path:
         s.append(Paragraph("No se identificaron cifras en la fuente.", st["body"]))
 
     s.append(Paragraph("LINK DE LA NOTICIA", st["h"]))
-    links = ia.get("LINKS") or {}
+    links = ia.get("LINKS") if isinstance(ia.get("LINKS"), dict) else {}
     for etiqueta, url in (("Facebook", links.get("facebook")), ("Nota completa", links.get("externo"))):
         if url:
-            u = escape(url)
-            s.append(Paragraph(f"{etiqueta}: <link href='{u}' color='blue'>{u}</link>", st["link"]))
+            # comillas escapadas: una URL con ' o " rompía el marcado de ReportLab (y el PDF entero)
+            u = escape(str(url), {'"': "&quot;", "'": "&#39;"})
+            s.append(Paragraph(f'{etiqueta}: <link href="{u}" color="blue">{u}</link>', st["link"]))
     if not any(links.values()):
         s.append(Paragraph("No disponible.", st["link"]))
 
@@ -105,5 +109,5 @@ def generar_pdf(post: dict, ia: dict) -> Path:
 
     SimpleDocTemplate(str(destino), pagesize=A4, leftMargin=2.2 * cm, rightMargin=2.2 * cm,
                       topMargin=2 * cm, bottomMargin=2 * cm,
-                      title=ia.get("TITULAR", ""), author=post["pagina"]).build(s)
+                      title=ia.get("TITULAR") or "", author=post["pagina"]).build(s)
     return destino

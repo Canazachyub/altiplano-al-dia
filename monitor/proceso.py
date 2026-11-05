@@ -14,8 +14,14 @@ def unica_instancia() -> bool:
     global _mutex
     if sys.platform != "win32":
         return True
-    _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "AltiplanoAlDia_Monitor_UnaInstancia")
-    return ctypes.windll.kernel32.GetLastError() != 183      # ERROR_ALREADY_EXISTS
+    # use_last_error: ctypes guarda el GetLastError() justo tras la llamada; leerlo después con
+    # windll.kernel32.GetLastError() no es fiable (cualquier llamada intermedia lo pisa)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateMutexW.restype = ctypes.c_void_p
+    _mutex = k32.CreateMutexW(None, False, "AltiplanoAlDia_Monitor_UnaInstancia")
+    if not _mutex:
+        return True             # no se pudo crear: mejor abrir que bloquear la app
+    return ctypes.get_last_error() != 183      # ERROR_ALREADY_EXISTS
 
 
 def traer_ventana_existente() -> None:

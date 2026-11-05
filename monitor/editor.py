@@ -22,7 +22,15 @@ class EditorNota(tk.Toplevel):
     def __init__(self, master, gid: int, cfg: dict, on_save=None):
         super().__init__(master)
         self.gid, self.cfg, self.on_save = gid, cfg, on_save
+        self._guardando = False
+        self._inicial = None
         g = storage.get_grupo(gid)
+        if g is None or not g["nota_json"]:
+            self.withdraw()
+            messagebox.showwarning("Editar nota", "Esta noticia ya no existe o todavía no tiene nota redactada.",
+                                   parent=master)
+            self.after_idle(self.destroy)
+            return
         self.nota = json.loads(g["nota_json"])
         self.posts = storage.posts_de_grupo(gid)
         self.title(f"Editar nota · grupo #{gid}")
@@ -37,14 +45,21 @@ class EditorNota(tk.Toplevel):
         pie = ttk.Frame(self, padding=(12, 6, 12, 10))
         pie.pack(side="bottom", fill="x")
         ttk.Button(pie, text="💾 Guardar  (Ctrl+S)", style="Accent.TButton", command=self._guardar).pack(side="right")
-        ttk.Button(pie, text="Cancelar  (Esc)", command=self.destroy).pack(side="right", padx=6)
+        ttk.Button(pie, text="Cancelar  (Esc)", command=self._cancelar).pack(side="right", padx=6)
         ttk.Label(pie, text="Los cambios se ven en el periódico al guardar.", foreground=MUTED).pack(side="left")
         cab = ttk.Frame(self, padding=(12, 8, 12, 0))
         cab.pack(side="top", fill="x")
         ttk.Button(cab, text="💾 Guardar", style="Accent.TButton", command=self._guardar).pack(side="right")
+        medio = self.nota.get("_menciona_medio")
+        if medio:
+            # la IA dejó el nombre del medio de origen en el texto: hay que sacarlo antes de publicar
+            tk.Label(cab, text=f"⚠ El texto todavía nombra al medio de origen «{medio}». Quítalo del titular, "
+                               "la bajada y el cuerpo antes de publicar.", bg="#FDECEC", fg="#B3261E",
+                     font=(F, 10, "bold"), padx=10, pady=4, wraplength=760, justify="left").pack(side="left")
         self.bind("<Control-s>", lambda e: self._guardar())
         self.bind("<Control-S>", lambda e: self._guardar())
-        self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<Escape>", lambda e: self._cancelar())
+        self.protocol("WM_DELETE_WINDOW", self._cancelar)
         cuerpo = ttk.Frame(self, padding=12)
         cuerpo.pack(fill="both", expand=True)
         cuerpo.columnconfigure(0, weight=3)
@@ -131,7 +146,25 @@ class EditorNota(tk.Toplevel):
             anchor="w", pady=(16, 0))
 
         self._mostrar_foto()
+        self._inicial = self._estado()
+        self.campos["TITULAR"].focus_set()
         self.grab_set()
+
+    # ------------------------------------------------------------------ cambios sin guardar
+    def _estado(self):
+        return ([e.get() for e in self.campos.values()],
+                [t.get("1.0", "end") for t in (self.bajada, self.cuerpo, self.datos, self.p_puntos)],
+                self.p_tit.get(), self.p_ante.get(), self.foto, self.incluir.get())
+
+    def hay_cambios(self):
+        return self._inicial is not None and self._estado() != self._inicial
+
+    def _cancelar(self):
+        if self.hay_cambios() and not messagebox.askyesno(
+                "Cambios sin guardar", "Hiciste cambios en esta nota que no guardaste.\n\n"
+                                       "¿Cerrar y perder los cambios?", icon="warning", parent=self):
+            return
+        self.destroy()
 
     # ------------------------------------------------------------------ util
     def _texto(self, parent, alto, valor):
@@ -153,9 +186,13 @@ class EditorNota(tk.Toplevel):
         return out
 
     def _miniatura(self, ruta, size):
-        im = Image.open(ruta)
-        im.thumbnail(size)
-        ph = ImageTk.PhotoImage(im)
+        """PhotoImage de la foto, o None si no se puede abrir (archivo dañado o borrado)."""
+        try:
+            with Image.open(ruta) as im:          # (con with: el archivo no queda bloqueado en Windows)
+                im.thumbnail(size)
+                ph = ImageTk.PhotoImage(im)
+        except Exception:  # noqa: BLE001
+            return None
         self._imgs.append(ph)
         return ph
 
@@ -166,7 +203,8 @@ class EditorNota(tk.Toplevel):
         if not cands:
             ttk.Label(self.galeria, text="(los posts de esta noticia no tienen foto)", foreground=MUTED).pack(anchor="w")
         for i, ruta in enumerate(cands):
-            b = tk.Label(self.galeria, image=self._miniatura(ruta, THUMB), cursor="hand2", bd=2,
+            ph = self._miniatura(ruta, THUMB)
+            b = tk.Label(self.galeria, image=ph or "", text="" if ph else "(foto dañada)", cursor="hand2", bd=2,
                          relief="solid" if ruta == self.foto else "flat")
             b.grid(row=i // 2, column=i % 2, padx=3, pady=3)
             b.bind("<Button-1>", lambda e, r=ruta: self._usar(r))
@@ -175,14 +213,16 @@ class EditorNota(tk.Toplevel):
         from .gui_portada import aviso_foto
         texto, color = aviso_foto(self.foto, 300)
         self.lbl_calidad.configure(text=texto, fg=color)
-        if self.foto and Path(self.foto).exists():
-            self.lbl_foto.configure(image=self._miniatura(self.foto, PREVIEW), text="", width=0, height=0)
+        ph = self._miniatura(self.foto, PREVIEW) if self.foto and Path(self.foto).exists() else None
+        if ph:
+            self.lbl_foto.configure(image=ph, text="", width=0, height=0)
         else:
             self.lbl_foto.configure(image="", text="Sin foto", font=(F, 12), fg=MUTED,
                                     width=36, height=11)
 
     def _usar(self, ruta):
         self.foto = ruta
+        self._imgs = []          # las miniaturas viejas se vuelven a crear (no se acumulan en memoria)
         self._mostrar_foto()
         self._llenar_galeria()
 
@@ -200,6 +240,8 @@ class EditorNota(tk.Toplevel):
         self._usar(str(destino))
 
     def _guardar(self):
+        if self._guardando:                   # (Ctrl+S repetido o doble clic)
+            return
         n = dict(self.nota)
         for clave, e in self.campos.items():
             n[clave] = e.get().strip()
@@ -207,7 +249,10 @@ class EditorNota(tk.Toplevel):
         n["CUERPO"] = self.cuerpo.get("1.0", "end").strip()
         n["DATOS"] = texto_a_datos(self.nota, self.datos.get("1.0", "end"))
         if not n["TITULAR"] or not n["CUERPO"]:
-            messagebox.showwarning("Editar nota", "El titular y el cuerpo no pueden quedar vacíos.", parent=self)
+            falta = "el titular" if not n["TITULAR"] else "el cuerpo"
+            messagebox.showwarning("Editar nota", f"Falta {falta}: el titular y el cuerpo no pueden quedar vacíos.",
+                                   parent=self)
+            (self.campos["TITULAR"] if not n["TITULAR"] else self.cuerpo).focus_set()
             return
         tit, ante = self.p_tit.get().strip(), self.p_ante.get().strip()
         puntos = [x.strip() for x in self.p_puntos.get("1.0", "end").splitlines() if x.strip()]
@@ -223,11 +268,22 @@ class EditorNota(tk.Toplevel):
         else:
             n["_IMAGEN"] = self.foto
         n["_EDITADO"] = datetime.now().isoformat(timespec="seconds")
-        storage.guardar_nota(self.gid, n)
-        storage.set_en_periodico([self.gid], self.incluir.get())
+        medio = (n.get("_menciona_medio") or "").strip().lower()
+        if medio and medio not in " ".join(str(n.get(k) or "") for k in
+                                           ("ANTETITULO", "TITULAR", "BAJADA", "CUERPO", "PIE_FOTO")).lower():
+            n.pop("_menciona_medio", None)          # ya se corrigió: se quita la advertencia
+        self._guardando = True
+        try:
+            storage.guardar_nota(self.gid, n)
+            storage.set_en_periodico([self.gid], self.incluir.get())
+        except Exception as e:  # noqa: BLE001
+            self._guardando = False
+            messagebox.showerror("Editar nota", f"No se pudo guardar la nota (vuelve a intentar en unos "
+                                                f"segundos):\n{e}", parent=self)
+            return
+        self.destroy()
         if self.on_save:
             self.on_save()
-        self.destroy()
 
 
 def datos_a_texto(nota: dict) -> str:
@@ -258,13 +314,15 @@ class EditorDatos(tk.Toplevel):
         ajustar_ventana(self, 780, 640)
         self.transient(master)
         self.on_save = on_save
+        self._guardando = False
         pie = ttk.Frame(self, padding=12)
         pie.pack(side="bottom", fill="x")
         ttk.Button(pie, text="💾 Guardar  (Ctrl+S)", style="Accent.TButton", command=self._guardar).pack(side="right")
-        ttk.Button(pie, text="Cancelar  (Esc)", command=self.destroy).pack(side="right", padx=6)
+        ttk.Button(pie, text="Cancelar  (Esc)", command=self._cancelar).pack(side="right", padx=6)
         self.bind("<Control-s>", lambda e: self._guardar())
         self.bind("<Control-S>", lambda e: self._guardar())
-        self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<Escape>", lambda e: self._cancelar())
+        self.protocol("WM_DELETE_WINDOW", self._cancelar)
         ttk.Label(self, text="Un dato por línea. Si borras todos los datos de las noticias, la caja no se muestra.",
                   foreground=MUTED, padding=(12, 10, 12, 4)).pack(anchor="w")
         cuerpo = ttk.Frame(self, padding=(12, 0))
@@ -272,21 +330,45 @@ class EditorDatos(tk.Toplevel):
         self.campos = {}
         for gid in gids:
             g = storage.get_grupo(gid)
+            if g is None or not g["nota_json"]:
+                continue
             nota = json.loads(g["nota_json"])
             ttk.Label(cuerpo, text=(g["titular"] or "")[:100], font=(F, 10, "bold")).pack(anchor="w", pady=(10, 2))
             t = tk.Text(cuerpo, height=5, wrap="word", font=(F, 10), relief="solid", borderwidth=1, padx=6, pady=4)
             t.insert("1.0", datos_a_texto(nota))
             t.pack(fill="both", expand=True)
             self.campos[gid] = (t, nota)
+        self._inicial = self._estado()
         self.grab_set()
 
+    def _estado(self):
+        return [t.get("1.0", "end") for t, _ in self.campos.values()]
+
+    def hay_cambios(self):
+        return self._estado() != self._inicial
+
+    def _cancelar(self):
+        if self.hay_cambios() and not messagebox.askyesno(
+                "Cambios sin guardar", "Hiciste cambios en los datos clave que no guardaste.\n\n"
+                                       "¿Cerrar y perder los cambios?", icon="warning", parent=self):
+            return
+        self.destroy()
+
     def _guardar(self):
-        for gid, (t, nota) in self.campos.items():
-            nota["DATOS"] = texto_a_datos(nota, t.get("1.0", "end"))
-            storage.guardar_nota(gid, nota)
+        if self._guardando:
+            return
+        self._guardando = True
+        try:
+            for gid, (t, nota) in self.campos.items():
+                nota["DATOS"] = texto_a_datos(nota, t.get("1.0", "end"))
+                storage.guardar_nota(gid, nota)
+        except Exception as e:  # noqa: BLE001
+            self._guardando = False
+            messagebox.showerror("Datos clave", f"No se pudo guardar:\n{e}", parent=self)
+            return
+        self.destroy()
         if self.on_save:
             self.on_save()
-        self.destroy()
 
 
 def ajustar_ventana(win, ancho, alto):

@@ -1,5 +1,6 @@
 """Ventana 📢 Avisos: biblioteca de avisos para los espacios libres (texto o imagen), con vista previa."""
 import io
+import json
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -56,10 +57,11 @@ class GestorAvisos(tk.Toplevel):
         pie.pack(side="bottom", fill="x")
         ttk.Button(pie, text="💾 Guardar y ver en el periódico  (Ctrl+S)", style="Accent.TButton",
                    command=self._guardar).pack(side="right")
-        ttk.Button(pie, text="Cerrar  (Esc)", command=self.destroy).pack(side="right", padx=6)
+        ttk.Button(pie, text="Cerrar  (Esc)", command=self._cerrar).pack(side="right", padx=6)
         self.bind("<Control-s>", lambda e: self._guardar())
         self.bind("<Control-S>", lambda e: self._guardar())
-        self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<Escape>", lambda e: self._cerrar())
+        self.protocol("WM_DELETE_WINDOW", self._cerrar)
         cuerpo = ttk.Frame(self, padding=(12, 0))
         cuerpo.pack(fill="both", expand=True)
         izq = ttk.Frame(cuerpo)
@@ -109,7 +111,27 @@ class GestorAvisos(tk.Toplevel):
 
         self._job = None
         self._refrescar_lista(0)
+        self._inicial = self._foto_estado()
         self.grab_set()
+
+    # ------------------------------------------------------------------ cambios sin guardar
+    def _foto_estado(self):
+        self._volcar()
+        return json.dumps([self.d, self.auto.get()], sort_keys=True, ensure_ascii=False)
+
+    def hay_cambios(self):
+        return self._foto_estado() != self._inicial
+
+    def _cerrar(self):
+        if self.hay_cambios():
+            r = messagebox.askyesnocancel("Avisos", "Hiciste cambios en los avisos que no guardaste.\n\n"
+                                                    "¿Guardarlos antes de cerrar?", parent=self)
+            if r is None:
+                return
+            if r:
+                self._guardar()
+                return
+        self.destroy()
 
     # ------------------------------------------------------------------
     def _refrescar_lista(self, idx=None):
@@ -160,6 +182,15 @@ class GestorAvisos(tk.Toplevel):
         self._volcar()
         if not self.sel:
             return
+        s = self.lista.curselection()
+        if s:
+            a = self.sel
+            texto = f" {'✔' if avisos.listo(a) else '⚠'}  {a.get('nombre') or a.get('titulo')}" + \
+                    (" · auto" if a.get("auto") else "")
+            if self.lista.get(s[0]) != texto:
+                self.lista.delete(s[0])
+                self.lista.insert(s[0], texto)
+                self.lista.selection_set(s[0])
         if not avisos.listo(self.sel):
             self.aviso_estado.configure(text="⚠ Falta el teléfono (o la imagen): así no se imprime en el periódico.")
         else:
@@ -230,7 +261,11 @@ class GestorAvisos(tk.Toplevel):
     def _guardar(self):
         self._volcar()
         self.d["auto"] = self.auto.get()
-        avisos.guardar(self.d)
+        try:
+            avisos.guardar(self.d)
+        except OSError as e:
+            messagebox.showerror("Avisos", f"No se pudieron guardar los avisos:\n{e}", parent=self)
+            return
+        self.destroy()
         if self.al_guardar:
             self.al_guardar()
-        self.destroy()

@@ -18,7 +18,13 @@ import time
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
+
+try:  # existe desde Playwright 1.39; se importa del módulo interno porque sync_api no lo exporta
+    from playwright._impl._errors import TargetClosedError
+except ImportError:  # pragma: no cover
+    TargetClosedError = None
 
 from .config import PROFILE_DIR, page_slug
 from .storage import text_hash
@@ -26,6 +32,15 @@ from .storage import text_hash
 
 class NotLoggedIn(Exception):
     pass
+
+
+def navegador_cerrado(e: BaseException) -> bool:
+    """True si el error es porque se cerró la ventana / el navegador (no tiene sentido seguir)."""
+    if TargetClosedError is not None and isinstance(e, TargetClosedError):
+        return True
+    msg = str(e)
+    return isinstance(e, PlaywrightError) and any(
+        t in msg for t in ("has been closed", "Target closed", "Browser closed", "Connection closed"))
 
 
 MESES = {
@@ -159,12 +174,21 @@ def open_context(pw, canal="chrome", headless=False):
         args=["--disable-blink-features=AutomationControlled"],
     )
     # Chrome instalado -> Edge (viene con Windows) -> Chromium de Playwright
+    primer_error = None
     for ch in dict.fromkeys(c for c in (canal, "chrome", "msedge") if c):
         try:
             return pw.chromium.launch_persistent_context(channel=ch, **kwargs)
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            primer_error = primer_error or e
             continue
-    return pw.chromium.launch_persistent_context(**kwargs)
+    try:
+        return pw.chromium.launch_persistent_context(**kwargs)
+    except Exception as e:  # noqa: BLE001
+        # el error útil suele ser el del primer navegador (p. ej. «perfil en uso»), no el del
+        # Chromium de Playwright, que casi nunca está instalado
+        if primer_error is not None:
+            raise RuntimeError(f"No se pudo abrir el navegador: {primer_error}") from e
+        raise
 
 
 def is_login_wall(page) -> bool:
@@ -253,20 +277,29 @@ def scrape_page(page, url, max_posts=8, is_known=None, log=print, max_scrolls=15
         raise NotLoggedIn("Facebook pide iniciar sesión (usa el botón 'Iniciar sesión en Facebook').")
 
     posts, vistos, conocidos_seguidos = [], set(), 0
+    vueltas_sin_nada = 0   # scrolls seguidos sin ningún post nuevo en pantalla
     for _ in range(max_scrolls):
         if cancelar and cancelar():
             raise Cancelado()
+        n_vistos = len(vistos)
         for h in page.query_selector_all("div[aria-posinset]"):
             if cancelar and cancelar():
                 raise Cancelado()
-            k = h.get_attribute("aria-posinset")
-            if k in vistos:
+            try:
+                k = h.get_attribute("aria-posinset")
+                if k in vistos:
+                    continue
+                if not h.query_selector('[data-ad-rendering-role="profile_name"]'):
+                    continue  # aún sin renderizar o ya virtualizado
+                vistos.add(k)
+                ts = _expand_and_hover(page, h) or {}
+                data = h.evaluate(EXTRACT_JS)
+            except PlaywrightError as e:
+                # un post que FB quitó del DOM (virtualizado) no debe tirar todo lo leído de la página
+                if navegador_cerrado(e):
+                    raise
+                log(f"  [{slug}] post omitido: {str(e).splitlines()[0][:120]}")
                 continue
-            if not h.query_selector('[data-ad-rendering-role="profile_name"]'):
-                continue  # aún sin renderizar o ya virtualizado
-            vistos.add(k)
-            ts = _expand_and_hover(page, h) or {}
-            data = h.evaluate(EXTRACT_JS)
 
             post_id, permalink = canonical(ts.get("href"))
             if not post_id:
@@ -304,6 +337,13 @@ def scrape_page(page, url, max_posts=8, is_known=None, log=print, max_scrolls=15
             if len(posts) >= max_posts or conocidos_seguidos >= 3:
                 return posts
             pausa(0.6, 1.5)
+        vueltas_sin_nada = vueltas_sin_nada + 1 if len(vistos) == n_vistos else 0
+        if vueltas_sin_nada >= 5:
+            # fin del feed, o FB cambió el DOM: no tiene sentido seguir bajando
+            if not vistos:
+                log(f"  [{slug}] no se encontró ninguna publicación (¿cambió el DOM de Facebook "
+                    "o la página no está disponible?)")
+            break
         page.mouse.wheel(0, random.randint(600, 1100))
         pausa(1.5, 3.2)
     return posts

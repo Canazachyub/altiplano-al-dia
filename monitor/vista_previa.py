@@ -5,6 +5,7 @@ foto, titular de portada) y al guardar la vista se actualiza sola. Clic derecho:
 periódico o ponerla en un lugar de la portada. Desde aquí también se publica.
 """
 import json
+import logging
 import os
 import threading
 import tkinter as tk
@@ -24,6 +25,26 @@ CARPETA = BASE_DIR / "data" / "previa"
 ZOOMS = [0.6, 0.8, 1.0, 1.25, 1.5, 2.0]
 
 
+def _foto_pagina(doc, i, escala):
+    """PhotoImage de la página i. La página se cierra enseguida (antes quedaban abiertas en memoria)."""
+    pag = doc[i]
+    try:
+        return ImageTk.PhotoImage(pag.render(scale=escala).to_pil())
+    finally:
+        pag.close()
+
+
+def _borrar_pdf(ruta):
+    """Borra un PDF de vista previa y su mapa .json (si Windows lo tiene bloqueado, se deja)."""
+    if not ruta:
+        return
+    for f in (ruta, ruta.with_suffix(".json")):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+
+
 class VistaPrevia(tk.Toplevel):
     def __init__(self, app, edicion=None):
         """edicion: número de un periódico ya publicado para verlo y corregirlo (None = el próximo)."""
@@ -32,8 +53,9 @@ class VistaPrevia(tk.Toplevel):
         self.edicion = edicion
         self.title(f"Periódico N° {edicion} (publicado) — Altiplano al Día" if edicion
                    else "Vista previa del periódico — Altiplano al Día")
-        self.geometry("1280x900")
-        self.minsize(900, 600)
+        from .editor import ajustar_ventana
+        ajustar_ventana(self, 1280, 900)
+        self.minsize(900, 560)
         self.configure(bg="#E9EDF4")
         try:
             self.state("zoomed")
@@ -48,6 +70,11 @@ class VistaPrevia(tk.Toplevel):
         self._thumbs = []
         self._zona_actual = None
         self._generando = False
+        self._otra_vez = False      # se pidió actualizar mientras se armaba: se rehace al terminar
+        self._esperando = False     # ya hay un reintento programado (revisión en curso)
+        self._guardando_ed = False
+        self._cerrada = False
+        self._job_redim = None
         self.ox = self.oy = 0
 
         self._barra()
@@ -82,11 +109,18 @@ class VistaPrevia(tk.Toplevel):
         self.cv.bind("<Button-1>", self._clic)
         self.cv.bind("<Button-3>", self._menu)
         self.cv.bind("<MouseWheel>", self._rueda)
-        self.cv.bind("<Configure>", lambda e: self.zoom is None and self._mostrar())
-        self.bind("<Left>", lambda e: self.ir(self.pagina - 1))
-        self.bind("<Right>", lambda e: self.ir(self.pagina + 1))
-        self.bind("<Prior>", lambda e: self.ir(self.pagina - 1))
-        self.bind("<Next>", lambda e: self.ir(self.pagina + 1))
+        self.cv.bind("<Configure>", self._al_redimensionar)
+        # flechas, RePág/AvPág, Inicio/Fin: cambian de página, salvo que se esté escribiendo en un campo
+        # (antes, mover el cursor en un campo del panel 🎨 Diseño cambiaba de página)
+        for tecla, destino in (("<Left>", lambda: self.pagina - 1), ("<Right>", lambda: self.pagina + 1),
+                               ("<Prior>", lambda: self.pagina - 1), ("<Next>", lambda: self.pagina + 1),
+                               ("<Home>", lambda: 0), ("<End>", lambda: len(self.doc) - 1 if self.doc else 0)):
+            self.bind(tecla, lambda e, d=destino: None if self._escribiendo(e) else self.ir(d()))
+        # F5 aquí actualiza la vista previa (sin esto, F5 lanzaba una revisión de Facebook)
+        self.bind("<F5>", lambda e: (self.generar(), "break")[1])
+        self.bind("<Control-plus>", lambda e: self._zoom(+1))
+        self.bind("<Control-minus>", lambda e: self._zoom(-1))
+        self.bind("<Control-0>", lambda e: self._zoom(None))
         self.protocol("WM_DELETE_WINDOW", self._cerrar)
 
         self.aviso = tk.Label(self.cv, text="", bg="#FFF4CC", fg="#6B4E00", font=(F, 12, "bold"), padx=18, pady=10,
@@ -98,14 +132,13 @@ class VistaPrevia(tk.Toplevel):
     def _barra(self):
         b = tk.Frame(self, bg=NAVY)
         b.pack(fill="x")
-        self.lbl_tit = tk.Label(b, text="Vista previa", bg=NAVY, fg="white", font=(F, 13, "bold"))
-        self.lbl_tit.pack(side="left", padx=14, pady=8)
+        self.lbl_tit = tk.Label(b, text="Vista previa", bg=NAVY, fg="white", font=(F, 13, "bold"), anchor="w")
         ttk.Button(b, text=(f"💾 Guardar cambios en el N° {self.edicion}" if self.edicion
                             else "📰 Publicar este periódico"), style="Accent.TButton",
                    command=self._publicar).pack(side="right", padx=(4, 12), pady=6)
         ttk.Button(b, text="Abrir en visor PDF", style="Header.TButton",
-                   command=lambda: self.ruta and os.startfile(str(self.ruta))).pack(side="right", padx=4)  # noqa: S606
-        ttk.Button(b, text="⟳ Actualizar", style="Header.TButton", command=self.generar).pack(side="right", padx=4)
+                   command=self._abrir_visor).pack(side="right", padx=4)
+        ttk.Button(b, text="⟳ Actualizar (F5)", style="Header.TButton", command=self.generar).pack(side="right", padx=4)
         ttk.Button(b, text="🎨 Diseño", style="Header.TButton", command=self._toggle_diseno).pack(side="right", padx=4)
         ttk.Button(b, text="📢 Avisos", style="Header.TButton", command=self._gestor_avisos).pack(side="right", padx=4)
         ttk.Button(b, text="Ajustar", style="Header.TButton", command=lambda: self._zoom(None)).pack(side="right", padx=4)
@@ -115,51 +148,98 @@ class VistaPrevia(tk.Toplevel):
         self.lbl_pag = tk.Label(b, text="", bg=NAVY, fg="white", font=(F, 10))
         self.lbl_pag.pack(side="right")
         ttk.Button(b, text="◀", width=3, style="Header.TButton", command=lambda: self.ir(self.pagina - 1)).pack(side="right", padx=4)
+        # el título va al final: si la pantalla es angosta se recorta el título, no los botones
+        self.lbl_tit.pack(side="left", padx=14, pady=8, fill="x", expand=True)
         h = tk.Frame(self, bg="#E8F0FE")
         h.pack(fill="x")
-        tk.Label(h, text="Clic en una noticia: editar texto, foto y titular.   Clic derecho: quitar, mover a otra "
-                         "página o a la portada.   Clic en un espacio libre: poner una noticia o un aviso.   "
-                         "🎨 Diseño: textos, colores y letras.",
-                 bg="#E8F0FE", fg="#1D4ED8", font=(F, 9)).pack(side="left", padx=14, pady=4)
+        ayuda = tk.Label(h, text="Clic en una noticia: editar texto, foto y titular.   Clic derecho: quitar, mover a "
+                                 "otra página o a la portada.   Clic en un espacio libre: poner una noticia o un aviso."
+                                 "   🎨 Diseño: textos, colores y letras.   ◀ ▶ o rueda: cambiar de página · "
+                                 "Ctrl+rueda: zoom",
+                         bg="#E8F0FE", fg="#1D4ED8", font=(F, 9), justify="left", anchor="w")
+        ayuda.pack(side="left", padx=14, pady=4, fill="x", expand=True)
+        h.bind("<Configure>", lambda e: ayuda.configure(wraplength=max(300, e.width - 30)))
+
+    @staticmethod
+    def _escribiendo(e):
+        return isinstance(e.widget, (tk.Entry, ttk.Entry, tk.Text, tk.Spinbox, tk.Listbox))
+
+    def _abrir_visor(self):
+        if self.ruta and self.ruta.exists():
+            os.startfile(str(self.ruta))  # noqa: S606
+        else:
+            self.app._aviso("La vista previa todavía se está armando.", "warn")
 
     # ------------------------------------------------------------------ generar y cargar
     def generar(self):
+        if self._cerrada:
+            return
         if self._generando:
+            # (antes se ignoraba: lo guardado mientras se armaba la vista previa no aparecía)
+            self._otra_vez = True
             return
         if self.app.running:
             self._mensaje("Hay una revisión en curso: la vista previa se actualizará al terminar…")
-            self.after(3000, self.generar)
+            if not self._esperando:          # un solo reintento programado a la vez
+                self._esperando = True
+                self.after(3000, self._reintentar)
             return
         from .analisis import fase2_lock
         if not self._grupos():
             self._mensaje("No hay noticias marcadas (☑) para el periódico.")
             return
         self._generando = True
+        self._otra_vez = False
         self._mensaje("⏳ Armando la vista previa…")
         CARPETA.mkdir(parents=True, exist_ok=True)
-        destino = CARPETA / f"vista_previa_{datetime.now():%Y%m%d_%H%M%S}.pdf"
+        destino = CARPETA / f"vista_previa_{datetime.now():%Y%m%d_%H%M%S_%f}.pdf"
         cfg = self.app._cfg_actual()
+        grupos, ahora = self._grupos(), self._fecha_edicion()
 
         def run():
+            # este hilo NO toca Tk: el resultado vuelve a la interfaz por la cola de la app
             from .consolidado import generar_consolidado
             try:
                 with fase2_lock:
-                    out = generar_consolidado(cfg, grupos=self._grupos(), destino=destino, registrar=False,
-                                              numero=self.edicion, ahora=self._fecha_edicion())
-                self.after(0, lambda: self._cargar(out))
+                    out = generar_consolidado(cfg, grupos=grupos, destino=destino, registrar=False,
+                                              numero=self.edicion, ahora=ahora)
+                self.app.en_ui(lambda: self._terminado(out, None))
             except Exception as e:  # noqa: BLE001
+                logging.getLogger("monitor").exception("Vista previa")
                 msg = f"No se pudo armar la vista previa: {e}"
-                self.after(0, lambda: self._mensaje(msg, error=True))
-            finally:
-                self._generando = False
+                self.app.en_ui(lambda: self._terminado(None, msg))
 
         threading.Thread(target=run, daemon=True).start()
+
+    def _reintentar(self):
+        self._esperando = False
+        if not self._cerrada:
+            self.generar()
+
+    def _terminado(self, out, error):
+        self._generando = False
+        if self._cerrada or not self.winfo_exists():
+            _borrar_pdf(out)                  # la ventana ya se cerró: no dejar archivos sueltos
+            return
+        if error:
+            self._mensaje(error, error=True)
+        elif out is None:
+            self._mensaje("No hay noticias marcadas (☑) para el periódico.")
+        else:
+            try:
+                self._cargar(out)
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger("monitor").exception("Vista previa: mostrar")
+                self._mensaje(f"No se pudo mostrar la vista previa: {e}", error=True)
+        if self._otra_vez:
+            self.generar()
 
     def _cargar(self, ruta):
         if not self.winfo_exists():
             return
         if self.doc is not None:
             self.doc.close()
+            self.doc = None
         viejo = self.ruta
         self.ruta = ruta
         self.doc = pdfium.PdfDocument(str(ruta))
@@ -167,12 +247,10 @@ class VistaPrevia(tk.Toplevel):
             self.mapa = json.loads(ruta.with_suffix(".json").read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             self.mapa = {"zonas": [], "titulares": {}}
+        for txt in self.mapa.get("avisos") or []:     # p. ej. Claude no pudo escribir los títulos de portada
+            self.app._aviso(str(txt), "warn", 7000)
         if viejo and viejo != ruta:      # borra la versión anterior (y su mapa)
-            for f in (viejo, viejo.with_suffix(".json")):
-                try:
-                    f.unlink()
-                except OSError:
-                    pass
+            _borrar_pdf(viejo)
         n = len(self._grupos())
         if self.edicion:
             self.lbl_tit.configure(text=f"Periódico publicado N° {self.edicion} · {n} noticias · puedes corregirlo")
@@ -188,17 +266,17 @@ class VistaPrevia(tk.Toplevel):
         self._thumbs = []
         y = 10
         for i in range(len(self.doc)):
-            im = self.doc[i].render(scale=0.2).to_pil()
-            ph = ImageTk.PhotoImage(im)
+            ph = _foto_pagina(self.doc, i, 0.2)
             self._thumbs.append(ph)
+            iw, ih = ph.width(), ph.height()
             borde = "#2563EB" if i == self.pagina else "#DDE3EC"
-            self.lista.create_rectangle(12, y - 3, 12 + im.width + 6, y + im.height + 3, outline=borde, width=3,
+            self.lista.create_rectangle(12, y - 3, 12 + iw + 6, y + ih + 3, outline=borde, width=3,
                                         tags=(f"t{i}", "marco"))
             self.lista.create_image(15, y, image=ph, anchor="nw", tags=(f"t{i}",))
-            self.lista.create_text(15 + im.width / 2, y + im.height + 12, text=str(i + 1), font=(F, 9, "bold"),
+            self.lista.create_text(15 + iw / 2, y + ih + 12, text=str(i + 1), font=(F, 9, "bold"),
                                    fill="#374151", tags=(f"t{i}",))
             self.lista.tag_bind(f"t{i}", "<Button-1>", lambda e, k=i: self.ir(k))
-            y += im.height + 30
+            y += ih + 30
         self.lista.configure(scrollregion=(0, 0, 160, y))
 
     # ------------------------------------------------------------------ dibujo de la página
@@ -208,20 +286,29 @@ class VistaPrevia(tk.Toplevel):
         alto = max(200, self.cv.winfo_height() - 24)
         return alto / self.mapa.get("alto", 842)
 
+    def _al_redimensionar(self, _e=None):
+        # al agrandar/achicar la ventana llegan decenas de eventos: se dibuja una sola vez al final
+        if self.zoom is not None:
+            return
+        if self._job_redim:
+            self.after_cancel(self._job_redim)
+        self._job_redim = self.after(120, self._mostrar)
+
     def _mostrar(self):
-        if self.doc is None:
+        self._job_redim = None
+        if self.doc is None or self._cerrada:
             return
         s = self._escala()
-        im = self.doc[self.pagina].render(scale=s).to_pil()
-        self._img = ImageTk.PhotoImage(im)
+        self._img = _foto_pagina(self.doc, self.pagina, s)
+        iw, ih = self._img.width(), self._img.height()
         self.cv.delete("pagina", "zona")
-        cw = max(self.cv.winfo_width(), im.width + 24)
-        self.ox = (cw - im.width) / 2
+        cw = max(self.cv.winfo_width(), iw + 24)
+        self.ox = (cw - iw) / 2
         self.oy = 12
-        self.cv.create_rectangle(self.ox + 4, self.oy + 4, self.ox + im.width + 4, self.oy + im.height + 4,
+        self.cv.create_rectangle(self.ox + 4, self.oy + 4, self.ox + iw + 4, self.oy + ih + 4,
                                  fill="#6B7684", outline="", tags="pagina")
         self.cv.create_image(self.ox, self.oy, image=self._img, anchor="nw", tags="pagina")
-        self.cv.configure(scrollregion=(0, 0, cw, im.height + 24))
+        self.cv.configure(scrollregion=(0, 0, cw, ih + 24))
         self.lbl_pag.configure(text=f"  Página {self.pagina + 1} de {len(self.doc)}  ")
         self.cv.delete("hueco")
         alto = self.mapa.get("alto", 842)
@@ -378,6 +465,11 @@ class VistaPrevia(tk.Toplevel):
 
     def _quitar(self, gid):
         if self.edicion:
+            tit = self.mapa.get("titulares", {}).get(str(gid), "")[:70]
+            if not messagebox.askyesno("Quitar del periódico publicado",
+                                       f"¿Quitar «{tit}» del periódico N° {self.edicion}?\n\n"
+                                       "El cambio se aplica al PDF cuando pulses «Guardar cambios».", parent=self):
+                return
             storage.sacar_de_edicion(gid)
             self.app._refresh_dashboard()
             self.app._aviso(f"Noticia quitada del N° {self.edicion} (queda en pendientes como ☐ No va).", "warn")
@@ -503,13 +595,23 @@ class VistaPrevia(tk.Toplevel):
         if self.edicion:
             self._guardar_edicion()
             return
-        self._cerrar()
-        self.app._publicar()
+        if self._cerrar():
+            self.app._publicar()
 
     def _guardar_edicion(self):
-        """Rehace el PDF del periódico publicado con los cambios, con el mismo número."""
+        """Rehace el PDF del periódico publicado con los cambios, con el mismo número (en un hilo:
+        antes la ventana se congelaba mientras se armaba el PDF)."""
         from pathlib import Path
+        from .analisis import fase2_lock
+        if self._guardando_ed:
+            self.app._aviso(f"Ya se está guardando el N° {self.edicion}; espera un momento.", "warn")
+            return
         c = storage.get_consolidado(self.edicion)
+        grupos = self._grupos()
+        if not c or not grupos:
+            messagebox.showwarning("Guardar cambios", f"El periódico N° {self.edicion} quedó sin noticias: añade "
+                                   "al menos una antes de guardar.", parent=self)
+            return
         if not messagebox.askyesno("Guardar cambios",
                                    f"Se rehará el periódico N° {self.edicion} con los cambios (mismo número y fecha)."
                                    "\n\n¿Continuar?", parent=self):
@@ -520,24 +622,64 @@ class VistaPrevia(tk.Toplevel):
                 destino.open("ab").close()
         except OSError:
             destino = destino.with_name(destino.stem + f"_corregido_{datetime.now():%H%M%S}.pdf")
-        grupos = self._grupos()
-        out = consolidado.generar_consolidado(self.app._cfg_actual(), grupos=grupos, destino=destino,
-                                              registrar=False, numero=self.edicion, ahora=self._fecha_edicion())
-        storage.actualizar_consolidado(self.edicion, out, len(grupos))
-        self.app._aviso(f"Periódico N° {self.edicion} actualizado: {out}", "ok", 7000)
-        os.startfile(str(out))  # noqa: S606
+        cfg, ahora, n = self.app._cfg_actual(), self._fecha_edicion(), self.edicion
+        self._guardando_ed = True
+        self._mensaje(f"⏳ Guardando el periódico N° {n}…")
+
+        def fin(out, error):
+            self._guardando_ed = False
+            vivo = not self._cerrada and self.winfo_exists()
+            if vivo and not self._generando:
+                self._mensaje(None)
+            if error:
+                messagebox.showerror("Guardar cambios", f"No se pudo rehacer el periódico N° {n}:\n{error}",
+                                     parent=self if vivo else self.app)
+                return
+            self.app._aviso(f"Periódico N° {n} actualizado: {out}", "ok", 7000)
+            try:
+                os.startfile(str(out))  # noqa: S606
+            except OSError:
+                pass
+
+        def run():
+            try:
+                with fase2_lock:
+                    out = consolidado.generar_consolidado(cfg, grupos=grupos, destino=destino, registrar=False,
+                                                          numero=n, ahora=ahora)
+                storage.actualizar_consolidado(n, out, len(grupos))
+                self.app.en_ui(lambda: fin(out, None))
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger("monitor").exception("Guardar edición %s", n)
+                msg = str(e)
+                self.app.en_ui(lambda: fin(None, msg))
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _cerrar(self):
+        """Cierra la vista previa. Devuelve False si el usuario prefirió no cerrar."""
+        hijas = [w for w in self.app._ventanas_con_cambios() if str(w).startswith(str(self) + ".")]
+        if hijas:
+            hijas[0].lift()
+            if not messagebox.askyesno("Cerrar la vista previa", "Hay una ventana con cambios sin guardar "
+                                       f"({hijas[0].title()}).\n\n¿Cerrar igual y perder esos cambios?",
+                                       icon="warning", parent=self):
+                return False
+        if self._guardando_ed:
+            self.app._aviso("El periódico corregido se sigue guardando; se abrirá al terminar.", "info")
+        self._cerrada = True
         if self.doc is not None:
             self.doc.close()
             self.doc = None
+        self._img, self._thumbs = None, []
         for f in CARPETA.glob("vista_previa_*"):
             try:
                 f.unlink()
             except OSError:
                 pass
-        self.app._ventana_previa = None
+        if self.app._ventana_previa is self:
+            self.app._ventana_previa = None
         self.destroy()
+        return True
 
     def traer(self):
         self.deiconify()
@@ -569,6 +711,9 @@ class ElegirNoticia(tk.Toplevel):
         self.q = ttk.Entry(top, width=32)
         self.q.pack(side="left", padx=4)
         self.q.bind("<KeyRelease>", lambda e: self._cargar())
+        self.q.focus_set()
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<Return>", lambda e: self._ok())
         cols = ("fecha", "titular", "medios", "estado")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", selectmode="browse")
         for c, t, w in (("fecha", "Fecha", 90), ("titular", "Titular", 470), ("medios", "Medios", 170),
@@ -583,7 +728,7 @@ class ElegirNoticia(tk.Toplevel):
         self.tree.pack(fill="both", expand=True, padx=(10, 0))
         self.tree.bind("<Double-1>", lambda e: self._ok())
         ttk.Button(pie, text=f"＋ Añadir en la página {pag}", style="Accent.TButton", command=self._ok).pack(side="right")
-        ttk.Button(pie, text="Cancelar", command=self.destroy).pack(side="right", padx=6)
+        ttk.Button(pie, text="Cancelar  (Esc)", command=self.destroy).pack(side="right", padx=6)
         ttk.Label(pie, text="Doble clic para añadir. Si no entra en el espacio, pasa a la página siguiente.",
                   foreground="#6B7280").pack(side="left")
         self._cargar()
@@ -608,7 +753,7 @@ class ElegirNoticia(tk.Toplevel):
                 continue
             if f == self.FILTROS[1] and pendiente:
                 continue
-            if q and q not in (g["titular"] or "").lower():
+            if q and q not in f"{g['titular'] or ''} {g['medios'] or ''}".lower():
                 continue
             estado = "No va" if pendiente else f"Publicada N° {g['ultimo_pdf']}"
             fecha = (g["fecha_hecho"] or g["actualizado"] or "")[:16].replace("T", " ")
@@ -620,9 +765,15 @@ class ElegirNoticia(tk.Toplevel):
     def _ok(self):
         s = self.tree.selection()
         if not s or not s[0].isdigit():
-            return
+            if len(self.tree.get_children()) == 1 and self.tree.get_children()[0].isdigit():
+                s = self.tree.get_children()          # (un solo resultado: Enter lo añade)
+            else:
+                return
         gid = int(s[0])
         g = storage.get_grupo(gid)
+        if g is None:
+            self._cargar()
+            return
         if g["estado_pdf"] not in ("nuevo", "actualizacion") and not messagebox.askyesno(
                 "Noticia ya publicada", f"Esta noticia ya salió en el N° {g['ultimo_pdf']}. "
                                         "¿Publicarla otra vez en este periódico?", parent=self):

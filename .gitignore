@@ -12,3 +12,5 @@ data/
 pdfs/
 noticias*.xlsx
 *.log
+config.json.bak
+config.json.tmp

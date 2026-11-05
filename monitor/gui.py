@@ -27,6 +27,9 @@ try:
 except Exception:  # noqa: BLE001
     notification = None
 
+# un solo «Reprocesar IA» a la vez (y nunca junto con una revisión: se llamaría dos veces a la IA)
+_reproceso_lock = threading.Lock()
+
 # ------------------------------------------------------------------ paleta
 BG = "#F3F5F9"
 PANEL = "#FFFFFF"
@@ -118,6 +121,8 @@ class App(tk.Tk):
         self.nuevos_ids = set()
         self.grupos_nuevos = set()
         self.amb_sel = "TODOS"
+        self._reprocesando = set()     # posts que se están reprocesando (evita doble clic)
+        self._job_buscar = None
 
         self._style()
         self._build_header()
@@ -159,6 +164,7 @@ class App(tk.Tk):
         """Deja el registro con ~9 líneas visibles (luego se cambia arrastrando el borde)."""
         self.update_idletasks()
         total = self.paned.winfo_height()
+        alto = min(alto, max(100, total // 4))      # en pantallas bajas el registro ocupa menos
         if total > 300:
             self.paned.sashpos(0, max(200, total - alto))
 
@@ -207,6 +213,18 @@ class App(tk.Tk):
         """Al cerrar la ventana: corta la revisión, cierra el navegador del monitor y termina el proceso."""
         if self._cerrando:
             return
+        abiertas = self._ventanas_con_cambios()
+        if abiertas:
+            abiertas[0].lift()
+            if not messagebox.askyesno("Cerrar", "Hay una ventana con cambios sin guardar "
+                                                 f"({abiertas[0].title()}).\n\n¿Cerrar igual y perder esos cambios?",
+                                       icon="warning", parent=self):
+                return
+        elif hasattr(self, "portada_tab") and self.portada_tab.hay_cambios():
+            r = messagebox.askyesnocancel("Cerrar", "La portada tiene cambios sin guardar. ¿Guardarlos antes de "
+                                                    "cerrar?", parent=self)
+            if r is None or (r and not self.portada_tab.guardar(silencioso=True)):
+                return
         if self.running or fase2_lock.locked():
             if not messagebox.askyesno("Cerrar", "Hay una revisión en curso. Se detendrá y se cerrará el "
                                                  "navegador del monitor. ¿Cerrar la aplicación?"):
@@ -217,6 +235,20 @@ class App(tk.Tk):
         self.title("Cerrando…")
         self._set_busy(True, "Cerrando: deteniendo la revisión y el navegador…")
         self._esperar_cierre(0)
+
+    def _ventanas_con_cambios(self):
+        """Ventanas abiertas (editores, avisos...) que tienen cambios sin guardar."""
+        out, pila = [], list(self.winfo_children())
+        while pila:
+            w = pila.pop()
+            pila.extend(w.winfo_children())
+            if isinstance(w, tk.Toplevel) and hasattr(w, "hay_cambios"):
+                try:
+                    if w.hay_cambios():
+                        out.append(w)
+                except Exception:  # noqa: BLE001
+                    pass
+        return out
 
     def _esperar_cierre(self, intentos):
         # hasta ~8 s para que el hilo de revisión cierre el navegador por sí mismo
@@ -323,7 +355,8 @@ class App(tk.Tk):
         self.q_text = tk.StringVar()
         e = ttk.Entry(bar, textvariable=self.q_text, width=32)
         e.pack(side="left", padx=(4, 12))
-        self.q_text.trace_add("write", lambda *a: self._load_posts())
+        self.q_text.trace_add("write", lambda *a: self._buscar_luego(self._load_posts))
+        e.bind("<Escape>", lambda ev: self.q_text.set(""))
         ttk.Label(bar, text="Medio:").pack(side="left")
         self.q_medio = ttk.Combobox(bar, state="readonly", width=22)
         self.q_medio.pack(side="left", padx=(4, 12))
@@ -437,9 +470,19 @@ class App(tk.Tk):
         ttk.Label(eb, text="Clic en ☑ para incluir o sacar · doble clic para editar texto y foto",
                   style="Muted.TLabel").pack(side="right")
 
-        # chips por tema
-        self.chips = ttk.Frame(tab)
-        self.chips.pack(fill="x", pady=(2, 8))
+        # chips por tema + buscador
+        fila_chips = ttk.Frame(tab)
+        fila_chips.pack(fill="x", pady=(2, 8))
+        self.d_buscar = tk.StringVar()
+        ttk.Button(fila_chips, text="✕", width=3, command=lambda: self.d_buscar.set("")).pack(side="right")
+        eb_q = ttk.Entry(fila_chips, textvariable=self.d_buscar, width=26)
+        eb_q.pack(side="right", padx=(4, 2))
+        eb_q.bind("<Escape>", lambda ev: self.d_buscar.set(""))
+        ttk.Label(fila_chips, text="🔎 Buscar:").pack(side="right")
+        Tip(eb_q, "Filtra la tabla por titular, medio o texto de la nota (Esc borra la búsqueda).")
+        self.d_buscar.trace_add("write", lambda *a: self._buscar_luego(self._refresh_dashboard))
+        self.chips = ttk.Frame(fila_chips)
+        self.chips.pack(side="left", fill="x", expand=True)
 
         pw = ttk.PanedWindow(tab, orient="horizontal")
         pw.pack(fill="both", expand=True)
@@ -464,6 +507,7 @@ class App(tk.Tk):
         self.gtree.bind("<Double-1>", lambda e: self._editar())
         self.gtree.tag_configure("fuera", foreground="#9CA3AF")
         self.gtree.tag_configure("publicada", foreground="#6B7280")
+        self.gtree.tag_configure("menciona", foreground=ERR)
 
         right = ttk.Frame(pw, padding=(10, 0, 0, 0))
         pw.add(right, weight=2)
@@ -638,7 +682,12 @@ class App(tk.Tk):
 
     def _remove_tema(self):
         i = self._sel(self.temas_lb)
-        if i is not None and self.temas_lb.size() > 1:
+        if i is None:
+            self._aviso("Selecciona un tema de la lista.", "warn")
+            return
+        if self.temas_lb.size() > 1 and messagebox.askyesno(
+                "Temas", f"¿Quitar el tema «{self.temas_lb.get(i)}»?\n\n"
+                         "Las noticias que ya lo tienen lo conservan.", parent=self):
             self.temas_lb.delete(i)
             self._save_temas()
 
@@ -765,6 +814,12 @@ class App(tk.Tk):
         if self.running:
             self._aviso("Ya hay una revisión en curso (franja amarilla). Puedes detenerla con «■ Detener».", "warn")
             return
+        if _reproceso_lock.locked() or self._reprocesando:
+            # un «Reprocesar IA» sigue trabajando: la revisión lo procesaría otra vez (doble llamada a la IA)
+            self._aviso("Se está reprocesando una noticia con IA; la revisión empezará en unos segundos.", "info")
+            if self.next_check is None or self.next_check > datetime.now() + timedelta(seconds=5):
+                self.next_check = datetime.now() + timedelta(seconds=5)
+            return
         detener.clear()
         self._set_busy(True, "Revisando Facebook…")
         self.last_error = ""
@@ -772,11 +827,21 @@ class App(tk.Tk):
         threading.Thread(target=self._run_check, args=(self._cfg_actual(),), daemon=True).start()
 
     def _run_check(self, cfg):
+        # revisar() no avisa "fin" cuando sale antes de tiempo (sin páginas activas, navegador
+        # ocupado por el login...): sin ese aviso la franja amarilla quedaba trabada para siempre.
+        fin = []
+
+        def emit(ev, d=None):
+            if ev == "fin":
+                fin.append(d)
+            self.q.put((ev, d))
         try:
-            revisar(cfg, self._emit)
+            revisar(cfg, emit)
         except Exception as e:  # noqa: BLE001
             self.q.put(("error", str(e)))
-            self.q.put(("fin", 0))
+        finally:
+            if not fin:
+                self.q.put(("fin", 0))
 
     def _run_fase2(self, forzar_pdf):
         if self.running or fase2_lock.locked():
@@ -787,10 +852,14 @@ class App(tk.Tk):
         self._set_busy(True, "Analizando con Claude…" if not forzar_pdf else "Generando boletín…")
         self.last_error = ""
 
+        detener.clear()          # se limpia ANTES de lanzar el hilo: un «Detener» temprano no se pierde
+
         def run():
             try:
-                detener.clear()
                 ciclo_fase2(cfg, self._emit, forzar_pdf=forzar_pdf, cancelar=detener.is_set)
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger("monitor").exception("Fase 2 manual")
+                self.q.put(("error", f"Agrupar noticias: {e}"))
             finally:
                 self.q.put(("fase2_manual_fin", None))
 
@@ -798,17 +867,34 @@ class App(tk.Tk):
 
     def _login(self):
         if self.running or browser_lock.locked():
-            messagebox.showwarning("Facebook", "Espera a que termine la revisión en curso.")
+            messagebox.showwarning("Facebook", "Espera a que termine la revisión en curso "
+                                               "(o a que se cierre la ventana de inicio de sesión).")
             return
+        self._aviso("Se abre el navegador del monitor: inicia sesión en Facebook y luego cierra esa ventana.",
+                    "info", 7000)
 
         def run():
-            with browser_lock:
-                interactive_login(self.cfg.get("navegador_canal"), log=lambda m: self.q.put(("status", m)))
-            self.q.put(("status", "Ventana de login cerrada. Sesión guardada en fb_profile/."))
+            try:
+                with browser_lock:
+                    interactive_login(self.cfg.get("navegador_canal"), log=lambda m: self.q.put(("status", m)))
+                self.q.put(("status", "Ventana de login cerrada. Sesión guardada en fb_profile/."))
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger("monitor").exception("Login de Facebook")
+                self.q.put(("error", f"No se pudo abrir el navegador para iniciar sesión: {e}"))
+            finally:
+                self.en_ui(self._refrescar_inicio)
 
         threading.Thread(target=run, daemon=True).start()
 
     def _tick(self):
+        try:
+            self._tick_paso()
+        except Exception:  # noqa: BLE001
+            logging.getLogger("monitor").exception("Error en el reloj de la interfaz")
+        finally:
+            self.after(1000, self._tick)
+
+    def _tick_paso(self):
         if self.next_check and not self.running and datetime.now() >= self.next_check:
             self.check_now()
         if self.running:
@@ -820,59 +906,83 @@ class App(tk.Tk):
         last = self.last_check.strftime("%d/%m %H:%M") if self.last_check else "—"
         err = f"   ⚠ {self.last_error[:90]}" if self.last_error else ""
         self.sched.set(f"Última revisión: {last}   ·   Próxima: {nxt}{err}")
-        if datetime.now().second % 10 == 0 and hasattr(self, "inicio") and self.nb.select() == str(self.inicio):
+        self._ticks = getattr(self, "_ticks", 0) + 1      # (el segundo exacto a veces se salta)
+        if self._ticks % 10 == 0 and hasattr(self, "inicio") and self.nb.select() == str(self.inicio):
             self.inicio.refrescar()
-        self.after(1000, self._tick)
+
+    def en_ui(self, fn):
+        """Pide que fn() se ejecute en el hilo de la interfaz (para usar desde hilos de trabajo:
+        Tk no se debe tocar desde otro hilo)."""
+        self.q.put(("ui", fn))
 
     def _poll_queue(self):
+        # cada evento se atiende por separado: si uno falla, la cola sigue funcionando
+        # (antes una excepción cortaba el sondeo y la franja amarilla quedaba para siempre)
         try:
-            while True:
-                ev, d = self.q.get_nowait()
-                if ev == "log":
-                    self.registro.desde_logging(*d)
-                    continue
-                if ev in ("status", "error", "nuevo", "consolidado", "detenido", "fin"):
-                    self._al_registro(ev, d)
-                if ev == "status":
-                    self.status.set(d)
-                    if self.running:
-                        self.busy_txt.configure(text=f"⏳ {d}")
-                elif ev == "error":
-                    self.last_error = d
-                    self.status.set(f"Error: {d}")
-                elif ev == "nuevo":
-                    self.nuevos_ids.add(d)
-                    self._load_posts()
-                elif ev == "actualizado":
-                    self._load_posts()
-                    self._notify_post(d)
-                elif ev == "grupo":
-                    self.grupos_nuevos.add(d)
-                    self._refresh_dashboard()
-                elif ev == "consolidado":
-                    self._notify("Boletín consolidado listo", os.path.basename(d))
-                    self.status.set(f"Boletín generado: {d}")
-                elif ev == "fase2_fin":
-                    self._refresh_dashboard()
-                    self._load_posts()
-                elif ev == "detenido":
-                    self._aviso("Revisión detenida. Lo leído hasta ese momento quedó guardado.", "warn")
-                elif ev == "fase2_manual_fin":
-                    self._set_busy(False)
-                    if not self.last_error:
-                        self.status.set("Análisis terminado.")
-                elif ev == "fin":
-                    self._set_busy(False)
-                    self.last_check = datetime.now()
-                    self._schedule()
-                    self._load_posts()
-                    self._refresh_dashboard()
-                    self.status.set(f"Revisión {'detenida' if detener.is_set() else 'terminada'}: "
-                                    f"{d} publicación(es) nueva(s)."
-                                    + (f"  Último error: {self.last_error}" if self.last_error else ""))
-        except queue.Empty:
-            pass
-        self.after(400, self._poll_queue)
+            for _ in range(500):
+                try:
+                    ev, d = self.q.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    self._evento(ev, d)
+                except Exception:  # noqa: BLE001
+                    if ev != "log":          # (si falla el propio registro, no se vuelve a registrar)
+                        logging.getLogger("monitor").exception("Error en la interfaz atendiendo «%s»", ev)
+        finally:
+            self.after(400 if self.q.empty() else 50, self._poll_queue)
+
+    def _evento(self, ev, d):
+        if ev == "ui":
+            d()
+            return
+        if ev == "log":
+            self.registro.desde_logging(*d)
+            return
+        if ev == "reproceso_fin":
+            self._reprocesando.discard(d)
+            self._load_posts()
+            return
+        if ev in ("status", "error", "nuevo", "consolidado", "detenido", "fin"):
+            self._al_registro(ev, d)
+        if ev == "status":
+            self.status.set(d)
+            if self.running:
+                self.busy_txt.configure(text=f"⏳ {d}")
+        elif ev == "error":
+            self.last_error = d
+            self.status.set(f"Error: {d}")
+        elif ev == "nuevo":
+            self.nuevos_ids.add(d)
+            self._load_posts()
+        elif ev == "actualizado":
+            self._reprocesando.discard(d)
+            self._load_posts()
+            self._notify_post(d)
+        elif ev == "grupo":
+            self.grupos_nuevos.add(d)
+            self._refresh_dashboard()
+        elif ev == "consolidado":
+            self._notify("Boletín consolidado listo", os.path.basename(d))
+            self.status.set(f"Boletín generado: {d}")
+        elif ev == "fase2_fin":
+            self._refresh_dashboard()
+            self._load_posts()
+        elif ev == "detenido":
+            self._aviso("Revisión detenida. Lo leído hasta ese momento quedó guardado.", "warn")
+        elif ev == "fase2_manual_fin":
+            self._set_busy(False)
+            if not self.last_error:
+                self.status.set("Análisis terminado.")
+        elif ev == "fin":
+            self._set_busy(False)
+            self.last_check = datetime.now()
+            self._schedule()
+            self._load_posts()
+            self._refresh_dashboard()
+            self.status.set(f"Revisión {'detenida' if detener.is_set() else 'terminada'}: "
+                            f"{d} publicación(es) nueva(s)."
+                            + (f"  Último error: {self.last_error}" if self.last_error else ""))
 
     def _notify(self, title, msg):
         self.bell()
@@ -973,10 +1083,32 @@ class App(tk.Tk):
     def _reprocess(self):
         r = self._current()
         if not r:
+            self._aviso("Selecciona una publicación de la lista.", "warn")
             return
+        if r["id"] in self._reprocesando:
+            self._aviso("Esa publicación ya se está reprocesando; espera unos segundos.", "warn")
+            return
+        if self.running or fase2_lock.locked():
+            # la revisión en curso también procesa los pendientes: se llamaría dos veces a la IA
+            self._aviso("Hay una revisión en curso (franja amarilla). Vuelve a intentarlo cuando termine.", "warn")
+            return
+        self._reprocesando.add(r["id"])
         storage.update_post(r["id"], estado="pendiente", error=None)
         self.status.set("Reprocesando con IA…")
-        threading.Thread(target=procesar_post, args=(r["id"], self._cfg_actual(), self._emit), daemon=True).start()
+        cfg = self._cfg_actual()
+        pid = r["id"]
+
+        def run():
+            try:
+                with _reproceso_lock:          # de a uno; y check_now espera a que termine
+                    procesar_post(pid, cfg, self._emit)
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger("monitor").exception("Reprocesar %s", pid)
+                self.q.put(("error", f"Reprocesar: {e}"))
+            finally:
+                self.q.put(("reproceso_fin", pid))
+
+        threading.Thread(target=run, daemon=True).start()
 
     # ================================================================== dashboard: datos
     def _desde(self):
@@ -1040,13 +1172,19 @@ class App(tk.Tk):
             x.bind("<Button-1>", lambda e: self._chip("Todos"))
 
         # tabla
+        q = self.d_buscar.get().strip().lower() if hasattr(self, "d_buscar") else ""
         sel = self.gtree.selection()
         self.gtree.delete(*self.gtree.get_children())
         for g in en_amb:
             if tema != "Todos" and g["tema"] != tema:
                 continue
+            if q and q not in " ".join(str(g[k] or "") for k in ("titular", "medios", "nota_json")).lower():
+                continue
             multi = storage.n_medios(g) > 1
             tags = ["multi"] if multi else []
+            menciona = '"_menciona_medio"' in (g["nota_json"] or "")   # la IA nombró al medio de origen
+            if menciona:
+                tags.append("menciona")
             if g["id"] in self.grupos_nuevos:
                 tags.append("nuevo")
             pdf = {"publicado": f"N° {g['ultimo_pdf']}", "actualizacion": "Actualizar",
@@ -1061,17 +1199,28 @@ class App(tk.Tk):
                 tags.append("publicada")
             va = ("☑ Va" if va_si else "☐ No va") if pendiente else "Publicada"
             self.gtree.insert("", "end", iid=str(g["id"]), tags=tags, values=(
-                va, "◆" if multi else "", _fecha_corta(g["fecha_hecho"]), g["titular"], g["medios"],
+                va, "⚠" if menciona else ("◆" if multi else ""), _fecha_corta(g["fecha_hecho"]),
+                ("⚠ Nombra al medio · " if menciona else "") + (g["titular"] or ""), g["medios"],
                 g["n_fuentes"], g["tema"], pdf))
         if sel and self.gtree.exists(sel[0]):
             self.gtree.selection_set(sel[0])
         listos = storage.grupos_para_pdf()
         self.lbl_va.configure(text=f"{len(listos)} noticia(s) irán en el próximo periódico")
         self._refrescar_inicio()
-        if not self.gtree.get_children() and self.d_mostrar.get() != "Todas":
+        if not self.gtree.get_children() and q:
+            self.gtree.insert("", "end", iid="vacio", values=(
+                "", "", "", f"Ninguna noticia coincide con «{q}». Borra la búsqueda (✕) o prueba Periodo → Todo.",
+                "", "", "", ""))
+        elif not self.gtree.get_children() and self.d_mostrar.get() != "Todas":
             self.gtree.insert("", "end", iid="vacio", values=(
                 "", "", "", "Sin noticias pendientes. Para ver las publicadas: Mostrar → Todas.",
                 "", "", "", ""))
+
+    def _buscar_luego(self, fn, ms=250):
+        """Espera a que se deje de escribir para filtrar (no recarga la tabla en cada tecla)."""
+        if self._job_buscar:
+            self.after_cancel(self._job_buscar)
+        self._job_buscar = self.after(ms, fn)
 
     def _chip(self, tema):
         self.d_tema.set(tema if self.d_tema.get() != tema else "Todos")
@@ -1097,6 +1246,9 @@ class App(tk.Tk):
         if storage.n_medios(g) > 1:
             t.add(f" ◆ COMBINADA · {storage.n_medios(g)} MEDIOS ", "badge_multi")
         t.add("\n")
+        if nota.get("_menciona_medio"):
+            t.add(f" ⚠ El texto todavía nombra al medio de origen «{nota['_menciona_medio']}». "
+                  "Ábrela con ✎ Editar nota y quítalo antes de publicar. \n", "warn")
         t.add(f"{g['ambito']} · {g['tema']} · {_fecha_corta(g['fecha_hecho'])} · grupo #{gid}\n", "meta")
         t.add((nota.get("TITULAR") or "") + "\n", "h1")
         t.add((nota.get("BAJADA") or "") + "\n", "baj")
@@ -1161,6 +1313,9 @@ class App(tk.Tk):
 
     def _cambiar_va(self, gid):
         g = storage.get_grupo(gid)
+        if g is None:
+            self._refresh_dashboard()
+            return
         titular = (g["titular"] or "")[:60]
         if g["estado_pdf"] not in ("nuevo", "actualizacion"):
             if messagebox.askyesno("Noticia ya publicada",
@@ -1191,8 +1346,17 @@ class App(tk.Tk):
         self._refresh_dashboard()
 
     def _tab_cambiada(self, _e=None):
+        previa, self._tab_previa = getattr(self, "_tab_previa", None), self.nb.select()
+        if previa == str(self.portada_tab) and previa != self._tab_previa and self.portada_tab.hay_cambios():
+            # al volver a la pestaña Portada se recarga: sin esto se perdía lo escrito sin guardar
+            if messagebox.askyesno("Portada", "Hiciste cambios en la portada que no guardaste.\n\n"
+                                              "¿Guardarlos ahora?", parent=self):
+                self.portada_tab.guardar()
+            else:
+                self.portada_tab.olvidar_cambios()
         if self.nb.select() == str(self.portada_tab):
-            self.portada_tab.recargar()
+            if not self.portada_tab.hay_cambios():
+                self.portada_tab.recargar()
         elif hasattr(self, "inicio") and self.nb.select() == str(self.inicio):
             self.inicio.refrescar()
 
@@ -1260,7 +1424,8 @@ class App(tk.Tk):
             if getattr(v, "edicion", None) == edicion:
                 v.traer()
                 return
-            v._cerrar()
+            if not v._cerrar():           # (el usuario prefirió no cerrar: tiene cambios sin guardar)
+                return
         self._ventana_previa = VistaPrevia(self, edicion)
 
     def _publicados(self):
@@ -1274,15 +1439,24 @@ class App(tk.Tk):
         from .editor import ajustar_ventana
         ajustar_ventana(w, 720, 420)
         w.transient(self)
-        tr = ttk.Treeview(w, columns=("n", "fecha", "notas", "archivo"), show="headings", selectmode="browse")
+        pie = ttk.Frame(w, padding=10)            # botones primero, abajo: siempre visibles
+        pie.pack(side="bottom", fill="x")
+        cuerpo = ttk.Frame(w)
+        cuerpo.pack(fill="both", expand=True, padx=10, pady=(10, 4))
+        tr = ttk.Treeview(cuerpo, columns=("n", "fecha", "notas", "archivo"), show="headings", selectmode="browse")
         for c, t, a in (("n", "N°", 60), ("fecha", "Fecha", 140), ("notas", "Noticias", 80), ("archivo", "Archivo", 400)):
             tr.heading(c, text=t)
             tr.column(c, width=a, anchor="center" if c != "archivo" else "w")
         for c in filas:
             tr.insert("", "end", iid=str(c["n"]), values=(c["n"], (c["fecha"] or "")[:16].replace("T", " "),
                                                          c["n_noticias"], os.path.basename(c["path"] or "")))
-        tr.pack(fill="both", expand=True, padx=10, pady=(10, 4))
+        sb = ttk.Scrollbar(cuerpo, command=tr.yview)
+        tr.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        tr.pack(side="left", fill="both", expand=True)
         tr.selection_set(str(filas[0]["n"]))
+        tr.focus(str(filas[0]["n"]))
+        tr.focus_set()
 
         def sel():
             s = tr.selection()
@@ -1297,15 +1471,16 @@ class App(tk.Tk):
         def pdf():
             n = sel()
             c = storage.get_consolidado(n) if n else None
-            if c and os.path.exists(c["path"]):
+            if c and c["path"] and os.path.exists(c["path"]):
                 os.startfile(c["path"])  # noqa: S606
             else:
                 self._aviso("No se encuentra el PDF de ese periódico.", "warn")
         tr.bind("<Double-1>", lambda e: ver())
-        pie = ttk.Frame(w, padding=10)
-        pie.pack(fill="x")
-        ttk.Button(pie, text="👁 Ver y corregir", style="Accent.TButton", command=ver).pack(side="right")
+        tr.bind("<Return>", lambda e: ver())
+        w.bind("<Escape>", lambda e: w.destroy())
+        ttk.Button(pie, text="👁 Ver y corregir  (Enter)", style="Accent.TButton", command=ver).pack(side="right")
         ttk.Button(pie, text="Abrir PDF", command=pdf).pack(side="right", padx=6)
+        ttk.Button(pie, text="Cerrar  (Esc)", command=w.destroy).pack(side="right")
         ttk.Label(pie, text="Doble clic para abrirlo en la vista previa y corregirlo.", style="Muted.TLabel").pack(side="left")
 
     def _publicar(self):

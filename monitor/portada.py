@@ -12,6 +12,7 @@ lo que no se fija se elige solo, por importancia y por tener foto.
 """
 import json
 import logging
+import re
 
 from PIL import Image
 from reportlab.lib import colors
@@ -115,11 +116,22 @@ nunca al medio que difundió la información:
 Responde SOLO JSON: {"noticias":[{"id":"n1","portada":"…","ante":"…","puntos":["…","…"]}]}"""
 
 
+def _ante_natural(a) -> str:
+    """Antetítulo con sus mayúsculas originales (a["ante"] viene en MAYÚSCULAS y capitalize()
+    dejaría los nombres propios en minúscula: "Consejo regional de puno")."""
+    n = a.get("nota") or {}
+    for cand in (n.get("ANTETITULO"), n.get("BAJADA") if len((n.get("BAJADA") or "").split()) <= 12 else None,
+                 a.get("tema")):
+        if cand and cand.strip():
+            return cand.strip().rstrip(".")
+    return a["ante"].capitalize()
+
+
 def textos_portada(cfg, arts, principal_gid=None, forzar=False):
     """Titulares de portada. Respeta los escritos a mano; los que faltan los pide a Claude en una
     sola llamada y los guarda en la nota (así la vista previa y el periódico final coinciden)."""
     from . import storage
-    out = {a["gid"]: {"portada": a["titular"], "ante": a["ante"].capitalize(), "puntos": []} for a in arts}
+    out = {a["gid"]: {"portada": a["titular"], "ante": _ante_natural(a), "puntos": []} for a in arts}
     for a in arts:
         n = a["nota"]
         if n.get("PORTADA_TITULAR") and not forzar:
@@ -149,17 +161,38 @@ def textos_portada(cfg, arts, principal_gid=None, forzar=False):
                 storage.actualizar_grupo(a["gid"], nota_json=nota)
     except Exception as e:  # noqa: BLE001
         log.warning("Portada sin textos de Claude: %s", e)
+        AVISOS.append(f"La portada usa los titulares originales: Claude no respondió ({e}).")
     return out
 
 
 # ------------------------------------------------------------------ primitivas de dibujo
+def _elipsis(lineas, font, size, ancho, maxlineas):
+    """Deja maxlineas; si sobra texto, la última termina en "…" sin pasarse del ancho."""
+    if len(lineas) <= maxlineas:
+        return lineas
+    out = lineas[:max(1, maxlineas)]
+    ult = out[-1].rstrip(" ,;:.-–—") + "…"
+    while pdfmetrics.stringWidth(ult, font, size) > ancho and " " in ult.strip():
+        ult = ult[:-1].rsplit(" ", 1)[0].rstrip(" ,;:.-–—") + "…"
+    out[-1] = ult
+    return out
+
+
+def _partir(texto, font, size, ancho):
+    from .consolidado import _partir as partir   # parte con guion las palabras que no entran
+    return partir(texto, font, size, ancho)
+
+
 def _ajustar(texto, font, ancho, alto, maxsize, minsize, maxlineas, interlinea=0.95):
+    """Mayor tamaño (de maxsize a minsize) en que el texto entra en el recuadro. Si ni al mínimo
+    entra, se corta con "…" (antes se perdía el final del titular sin avisar)."""
     for size in range(int(maxsize), int(minsize) - 1, -1):
         lineas = simpleSplit(texto, font, size, ancho)
         cabe = all(pdfmetrics.stringWidth(ln, font, size) <= ancho + 0.5 for ln in lineas)  # palabras largas
         if cabe and len(lineas) <= maxlineas and len(lineas) * size * interlinea <= alto:
             return size, lineas
-    return minsize, simpleSplit(texto, font, minsize, ancho)[:maxlineas]
+    maxl = max(1, min(maxlineas, int(alto / (minsize * interlinea)) if alto > 0 else 1))
+    return minsize, _elipsis(_partir(texto, font, minsize, ancho), font, minsize, ancho, maxl)
 
 
 def _contorno(c, x, y, t, font, size, relleno, borde=colors.white, grosor=None, sombra=True):
@@ -234,6 +267,8 @@ def _foto(c, a, x, y, w, h, k):
 
 # zonas clicables de la vista previa: [{pag, gid, rect, lugar}] (las llena el render)
 ZONAS = None
+# problemas de la última portada (p. ej. Claude no respondió): van al mapa .json como "avisos"
+AVISOS = []
 
 
 def _link(c, a, rect, lugar=None):
@@ -248,10 +283,60 @@ def _lineas_balanceadas(texto, font, ancho, maxsize):
     if len(palabras) < 2:
         size = min(maxsize, ancho / max(1, pdfmetrics.stringWidth(texto, font, 10)) * 10)
         return size, [texto]
+    def w10(t):
+        return pdfmetrics.stringWidth(t, font, 10)
     mejor = min(((" ".join(palabras[:i]), " ".join(palabras[i:])) for i in range(1, len(palabras))),
-                key=lambda ab: max(pdfmetrics.stringWidth(ab[0], font, 10), pdfmetrics.stringWidth(ab[1], font, 10)))
-    ancho10 = max(pdfmetrics.stringWidth(x, font, 10) for x in mejor)
-    return min(maxsize, ancho / ancho10 * 10 * 0.98), list(mejor)
+                key=lambda ab: max(w10(ab[0]), w10(ab[1])))
+    size = min(maxsize, ancho / max(w10(x) for x in mejor) * 10 * 0.98)
+    if size < maxsize * 0.62 and len(palabras) >= 6:
+        # titular largo: en 3 líneas parejas queda más grande que en 2 apretadas
+        tres = min(((" ".join(palabras[:i]), " ".join(palabras[i:j]), " ".join(palabras[j:]))
+                    for i in range(1, len(palabras) - 1) for j in range(i + 1, len(palabras))),
+                   key=lambda abc: max(w10(x) for x in abc))
+        size3 = min(maxsize, ancho / max(w10(x) for x in tres) * 10 * 0.98)
+        if size3 > size * 1.12:
+            return size3, list(tres)
+    return size, list(mejor)
+
+
+def _cabe(texto, font, size, ancho):
+    """Tamaño (como mucho 'size') con que el texto de una línea entra en 'ancho'."""
+    w = pdfmetrics.stringWidth(texto, font, size)
+    return size if w <= ancho or w <= 0 else size * ancho / w
+
+
+def _singular(texto, n):
+    """1 NOTICIAS -> 1 NOTICIA (el texto de la banda se puede editar: solo se toca esa palabra)."""
+    if n != 1:
+        return texto
+    return re.sub(r"\b(noticia)s\b", r"\1", texto, flags=re.IGNORECASE)
+
+
+def _panel_sin_destacada(c, x0, y0, x1, y1, ahora, v, k):
+    """Con pocas noticias no hay destacada: el hueco lleva la ilustración del altiplano con la fecha."""
+    from .config import ASSETS_DIR
+    w, h = x1 - x0, y1 - y0
+    c.saveState()
+    c.setFillColor(k["AZUL"])
+    c.rect(x0, y0, w, h, stroke=0, fill=1)
+    ilus = ASSETS_DIR / "altiplano_ilustracion.jpg"
+    if ilus.exists():
+        c.drawImage(k["recorte"](str(ilus), int(w), int(h)), x0, y0, w, h)
+        c.setFillColor(k["AZUL"], alpha=0.6)
+        c.rect(x0, y0, w, h, stroke=0, fill=1)
+        c.setFillAlpha(1)
+    c.setFillColor(colors.white)
+    ciudad = _t("ciudad", **v)
+    c.setFont("P-Banda", _cabe(ciudad, "P-Banda", 26, w - 20))
+    c.drawCentredString(x0 + w / 2, y0 + h / 2 + 6, ciudad)
+    fecha = k["fecha_larga"](ahora)
+    c.setFont("P-EtqM", _cabe(fecha, "P-EtqM", 10, w - 16))
+    c.drawCentredString(x0 + w / 2, y0 + h / 2 - 12, fecha)
+    c.setFillColor(k["AMARILLO"])
+    franja = _t("franja_2", **v)
+    c.setFont("P-EtqB", _cabe(franja, "P-EtqB", 10, w - 16))
+    c.drawCentredString(x0 + w / 2, y0 + h / 2 - 27, franja)
+    c.restoreState()
 
 
 # ------------------------------------------------------------------ portada
@@ -268,6 +353,11 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
     sel = elegir(arts_todos)
     if not sel:
         return
+    if not sel.get("principal"):          # (solo hay notas fijadas en otros lugares) la principal nunca falta
+        for lugar in ("lateral", "destacada", "abajo1", "abajo2", "abajo3"):
+            if sel.get(lugar):
+                sel["principal"] = sel.pop(lugar)
+                break
     principal = sel.get("principal")
     tx = textos_portada(cfg, list(sel.values()), principal["gid"] if principal else None)
     pag = lambda a: paginas_de.get(a["gid"], "—")  # noqa: E731
@@ -282,19 +372,27 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
     lh = lw * 297 / 999
     c.drawImage(k["logo_blanco"](), M + 12, top - 8 - lh, lw, lh, mask="auto")
     c.setFillColor(AMARILLO)
-    c.setFont("P-EtqB", 11)
-    c.drawString(M + 14, top - cab_h + 8, _t("lema", **v))
+    lema = _t("lema", **v)
+    c.setFont("P-EtqB", _cabe(lema, "P-EtqB", 11, cab_w - 28))
+    c.drawString(M + 14, top - cab_h + 8, lema)
 
     fy = top - cab_h - 15
     c.setFillColor(NEGRO)
-    c.setFont("P-EtqM", 10.5)
+    # franja de fecha: cada parte a continuación de la anterior (una fecha larga como
+    # "Miércoles 30 de septiembre de 2026" ya no pisa el separador)
     partes = [k["fecha_larga"](ahora), _t("franja_2", **v), _t("franja_3", **v)]
-    for i, (p, xx) in enumerate(zip(partes, (M, M + 154, M + 258))):
-        c.drawString(xx + (7 if i else 0), fy, p)
+    sep = 14
+    fs = _cabe("".join(partes), "P-EtqM", 10.5, cab_w - sep * (len(partes) - 1))
+    c.setFont("P-EtqM", fs)
+    xx = M
+    for i, p in enumerate(partes):
         if i:
             c.setStrokeColor(NEGRO)
             c.setLineWidth(0.9)
-            c.line(xx, fy - 3, xx, fy + 10)
+            c.line(xx + sep / 2, fy - 3, xx + sep / 2, fy + 10)
+            xx += sep
+        c.drawString(xx, fy, p)
+        xx += pdfmetrics.stringWidth(p, "P-EtqM", fs)
     c.setStrokeColor(AZUL)
     c.setLineWidth(2.5)
     c.line(M, fy - 7, M + cab_w, fy - 7)
@@ -306,10 +404,11 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
         t = tx[a["gid"]]
         c.setFillColor(color_tema(a["tema"]))
         yy = top - 10
-        for ln in simpleSplit(plano(t["ante"]), "P-Ante", TA, dx1 - dx0)[:2]:
-            c.setFont("P-Ante", TA)
+        sa, la = _ajustar(plano(t["ante"]), "P-Ante", dx1 - dx0, TA * 2.3, TA, TA * 0.8, 2, 1.05)
+        for ln in la:
+            c.setFont("P-Ante", sa)
             c.drawString(dx0, yy, ln)
-            yy -= 12
+            yy -= sa * 1.09
         fb, ft = fy - 7, yy - 1
         _foto(c, a, dx0, fb, dx1 - dx0, ft - fb, k)
         _velo(c, dx0, fb, dx1 - dx0, ft - fb, "derecha", 0.75, 0.0)
@@ -323,6 +422,8 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
         c.setStrokeColor(NEGRO)
         c.setLineWidth(3)
         c.line(dx0, fb - 0.5, dx1, fb - 0.5)
+    else:
+        _panel_sin_destacada(c, dx0, fy - 7, dx1, top, ahora, v, k)
 
     # ---------------- banda "Hoy en Puno"
     by1 = fy - 16
@@ -344,10 +445,12 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
     c.rect(0, 0, 124, 30, stroke=0, fill=1)
     c.setFillColor(colors.white)
     c.setFont("P-Banda", 13)
-    c.drawCentredString(62, 10, _t("cinta", **v))
+    cinta = _t("cinta", **v)
+    c.setFont("P-Banda", _cabe(cinta, "P-Banda", 13, 114))
+    c.drawCentredString(62, 10, cinta)
     c.restoreState()
     c.setFont("P-Banda", TB)
-    tit = _t("banda_1", **v) + " "
+    tit = _singular(_t("banda_1", **v), len(arts_todos)) + " "
     c.setFillColor(colors.white)
     c.drawString(M + 160, by0 + 26, tit)
     c.setFillColor(AMARILLO)
@@ -366,25 +469,29 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
         c.drawString(xx + 15, by0 + 11, lab)
         xx += 15 + pdfmetrics.stringWidth(lab, "P-Ante", 10) + 12
 
-    # ---------------- zona media
-    mz1, mz0 = by0 - 12, 205
+    # ---------------- zona media (con pocas noticias se estira: sin fila de abajo baja hasta el pie,
+    # sin nota lateral la principal ocupa todo el ancho)
+    hay_abajo = any(sel.get(x) for x in ("abajo1", "abajo2", "abajo3"))
+    mz1, mz0 = by0 - 12, (205 if hay_abajo else 34)
     lat_w = 170
     lx0, lx1 = M, M + lat_w
-    rx0, rx1 = lx1 + 14, W - M
-    c.setStrokeColor(NEGRO)
-    c.setLineWidth(0.8)
-    c.line(lx1 + 5, mz0, lx1 + 5, mz1)
-    c.line(lx1 + 8, mz0, lx1 + 8, mz1)
+    rx0, rx1 = (lx1 + 14 if sel.get("lateral") else M), W - M
+    if sel.get("lateral"):
+        c.setStrokeColor(NEGRO)
+        c.setLineWidth(0.8)
+        c.line(lx1 + 5, mz0, lx1 + 5, mz1)
+        c.line(lx1 + 8, mz0, lx1 + 8, mz1)
 
     a = sel.get("lateral")
     if a:
         t = tx[a["gid"]]
         yy = mz1 - 11
         c.setFillColor(color_tema(a["tema"]))
-        for ln in simpleSplit(plano(t["ante"]), "P-Ante", TA * 1.09, lat_w)[:4]:
-            c.setFont("P-Ante", TA * 1.09)
+        sa, la = _ajustar(plano(t["ante"]), "P-Ante", lat_w, TA * 1.09 * 4.6, TA * 1.09, TA * 0.85, 4, 1.1)
+        for ln in la:
+            c.setFont("P-Ante", sa)
             c.drawString(lx0, yy, ln)
-            yy -= 13
+            yy -= sa * 1.19
         yy -= 3
         size, lineas = _ajustar(plano(t["portada"]).upper(), "P-Tit2", lat_w, 170, TAM["portada_lateral"] * ep, 11, 6, 1.0)
         for ln in lineas:
@@ -442,14 +549,14 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
         _link(c, a, (rx0, mz0, rx1, mz1), "principal")
 
     # ---------------- fila inferior: la foto llena cada tarjeta y el titular va encima, a la izquierda
-    c.setStrokeColor(AMARILLO)
-    c.setLineWidth(4)
-    c.line(M, mz0 - 9, W - M, mz0 - 9)
-    c.setStrokeColor(AZUL)
-    c.setLineWidth(1)
-    c.line(M, mz0 - 12.5, W - M, mz0 - 12.5)
     abajo = [sel[x] for x in ("abajo1", "abajo2", "abajo3") if sel.get(x)]
     if abajo:
+        c.setStrokeColor(AMARILLO)
+        c.setLineWidth(4)
+        c.line(M, mz0 - 9, W - M, mz0 - 9)
+        c.setStrokeColor(AZUL)
+        c.setLineWidth(1)
+        c.line(M, mz0 - 12.5, W - M, mz0 - 12.5)
         n = len(abajo)
         gap = 12
         cw = (W - 2 * M - gap * (n - 1)) / n
@@ -462,8 +569,8 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
                 c.setLineWidth(0.9)
                 c.line(x0 - gap / 2, y0, x0 - gap / 2, y1)
             c.setFillColor(color_tema(a["tema"]))
-            c.setFont("P-Ante", TA * 0.95)
-            ante = simpleSplit(plano(t["ante"]), "P-Ante", TA * 0.95, cw)[:2]
+            sa, ante = _ajustar(plano(t["ante"]), "P-Ante", cw, TA * 0.95 * 2.3, TA * 0.95, TA * 0.75, 2, 1.05)
+            c.setFont("P-Ante", sa)
             for j, ln in enumerate(ante):
                 c.drawString(x0, y1 - 9 - j * 11, ln)
             ft = y1 - 15 - 11 * max(0, len(ante) - 1)

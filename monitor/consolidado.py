@@ -9,6 +9,7 @@ sección en vertical y el índice "En esta edición". Al final va una ficha de v
 import io
 import json
 import re
+import threading
 import unicodedata
 from datetime import datetime
 from functools import lru_cache
@@ -53,6 +54,8 @@ MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto
 
 
 D = diseno.cargar()
+# portada.ZONAS/AVISOS y las fuentes registradas son estado del módulo: una generación a la vez
+_GENERANDO = threading.Lock()
 MAQUETA_PATH = BASE_DIR / "data" / "maqueta.json"
 
 
@@ -126,8 +129,10 @@ def _st():
     t = D["tamanos"]
     tx, an, pf = float(t["texto"]), float(t["antetitulo"]), float(t["pie_foto"])
     return {
+        # allowWidows=0: la última línea de un párrafo nunca queda sola arriba de una columna
         "body": ParagraphStyle("body", fontName="Serif", fontSize=tx, leading=tx * 1.22, alignment=TA_JUSTIFY,
-                               hyphenationLang="es", embeddedHyphenation=1, uriWasteReduce=0.3, textColor=NEGRO),
+                               hyphenationLang="es", embeddedHyphenation=1, uriWasteReduce=0.3, textColor=NEGRO,
+                               allowWidows=0),
         "inter": ParagraphStyle("inter", fontName="Serif-B", fontSize=tx, leading=tx * 1.22, spaceBefore=3,
                                 textColor=NEGRO),
         "kicker": ParagraphStyle("kicker", fontName="FC-B", fontSize=an, leading=an * 1.14, textColor=NEGRO),
@@ -146,10 +151,41 @@ def _st():
 
 
 # ------------------------------------------------------------------ texto
+def _glifos():
+    """Caracteres que tiene la fuente del texto (None si todavía no está registrada)."""
+    try:
+        return pdfmetrics.getFont("Serif").face.charToGlyph
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _comillas(t: str) -> str:
+    """Comillas rectas -> tipográficas (“…” y ’), como en un diario impreso."""
+    t = re.sub(r'(^|[\s(\[{¿¡—–-])"', "\\1“", t)
+    t = t.replace('"', "”")
+    t = re.sub(r"(^|[\s(\[{¿¡—–-])'", "\\1‘", t)
+    return t.replace("'", "’")
+
+
 def _plano(t: str) -> str:
-    """Sin emojis ni símbolos que las fuentes no tienen (texto sin marcado)."""
-    t = "".join(ch for ch in (t or "") if ord(ch) < 0x2190 or unicodedata.category(ch).startswith(("L", "N", "P")))
-    return re.sub(r"\s+", " ", t.replace("͏", "")).strip()
+    """Sin emojis ni símbolos que las fuentes no tienen (texto sin marcado).
+    NFC une los acentos sueltos (e + ́ -> é); se quitan los caracteres invisibles (U+200B, U+FE0F…)
+    y todo lo que la fuente del texto no puede dibujar (saldría como un cuadrito)."""
+    t = unicodedata.normalize("NFC", t or "")
+    cmap = _glifos()
+    fuera = []
+    for ch in t:
+        cat = unicodedata.category(ch)
+        if ch.isspace():
+            fuera.append(" ")
+        elif cat in ("Cc", "Cf", "Co", "Cs", "Cn", "Mn", "Me"):
+            continue
+        elif cmap is not None:
+            if ord(ch) in cmap:
+                fuera.append(ch)
+        elif ord(ch) < 0x2190 or cat.startswith(("L", "N", "P")):
+            fuera.append(ch)
+    return _comillas(re.sub(r"\s+", " ", "".join(fuera)).strip())
 
 
 def _x(t: str) -> str:
@@ -212,6 +248,8 @@ def _articulo(g, cfg) -> dict:
 
 
 def _parrafos(art, st):
+    if "_flow" in art:                 # continuación de una nota larga: lo que no entró en la página anterior
+        return list(art["_flow"])
     out = []
     primero = True
     for i, par in enumerate(art["parrafos"]):
@@ -225,8 +263,9 @@ def _parrafos(art, st):
         if i == len(art["parrafos"]) - 1:
             txt += FIN
         out.append(Paragraph(txt, st["body"]))
-    if not out:
-        out.append(Paragraph(_x(art["titular"]) + FIN, st["body"]))
+    if not out:   # nota sin cuerpo: la bajada (o, si tampoco hay, el titular)
+        txt = _x(art["nota"].get("BAJADA") or "") or _x(art["titular"])
+        out.append(Paragraph(txt + FIN, st["body"]))
     return out
 
 
@@ -259,8 +298,109 @@ def _fluir(paras, rects):
     return puestos, cola
 
 
+def _medidas(art, paras, cw):
+    """Líneas de cada párrafo a ancho cw (se calcula una vez por nota y ancho).
+    [(es_cuerpo, n_lineas, interlineado, alto, espacio_antes)]"""
+    cache = art.setdefault("_med", {}) if "_flow" not in art else {}
+    s = paras[0].style if paras else None
+    clave = (round(cw, 2), s.fontName if s else "", s.fontSize if s else 0, len(paras))
+    if clave not in cache:
+        med = []
+        for p in paras:
+            _, ph = p.wrap(cw, 1e6)
+            n = len(p.blPara.lines) if hasattr(p, "blPara") else 1
+            med.append((p.style.name == "body", n, p.style.leading, ph, p.style.spaceBefore))
+        cache[clave] = med
+    return cache[clave]
+
+
+def _simular(med, rects):
+    """Lo mismo que _fluir pero contando líneas, sin volver a partir párrafos (mucho más rápido).
+    Sigue las reglas de Paragraph.split: sin huérfanas (1.ª línea sola) ni viudas (última sola)."""
+    i, resto, total = 0, None, len(med)
+    for (_, y0, _w, h) in rects:
+        y, libre = y0, h
+        while i < total:
+            body, n, lead, ph, sbp = med[i]
+            if resto is not None:
+                n, ph = resto, resto * lead
+            sa = 2 if body else 0
+            sb = sbp if y > y0 else 0
+            if ph + sb <= libre + 0.01:
+                if not body and libre - ph - sb < 3 * 11 and i < total - 1:
+                    break
+                y += ph + sb + sa
+                libre -= ph + sb + sa
+                i, resto = i + 1, None
+                continue
+            if body and libre - sb > 1e-6:
+                s = int((libre - sb) / lead)
+                if s > 1 and n > s:
+                    if n == s + 1:                 # quedaría una viuda
+                        s = s - 1 if n > 3 else 0
+                    if s:
+                        resto = n - s
+            break
+    return i >= total
+
+
+def _cortar_palabra(palabra, font, size, ancho):
+    """Parte con guion (pyphen, español) una palabra que no entra en el ancho del titular."""
+    try:
+        import pyphen
+        dic = pyphen.Pyphen(lang="es")
+    except Exception:  # noqa: BLE001
+        dic = None
+    trozos, resto = [], palabra
+    while pdfmetrics.stringWidth(resto, font, size) > ancho and len(resto) > 1:
+        corte = None
+        if dic:
+            for a, b in dic.iterate(resto):
+                if pdfmetrics.stringWidth(a + "-", font, size) <= ancho:
+                    corte = (a + "-", b)
+                    break
+        if corte is None:   # sin sílaba que sirva: corte duro por caracteres
+            k = len(resto) - 1
+            while k > 1 and pdfmetrics.stringWidth(resto[:k] + "-", font, size) > ancho:
+                k -= 1
+            corte = (resto[:k] + "-", resto[k:])
+        trozos.append(corte[0])
+        resto = corte[1]
+    return trozos + [resto]
+
+
+def _partir(texto, font, size, ancho):
+    """simpleSplit que además parte las palabras más anchas que la columna (nunca se salen del bloque)."""
+    lineas = []
+    for ln in simpleSplit(texto, font, size, ancho):
+        if pdfmetrics.stringWidth(ln, font, size) <= ancho + 0.5:
+            lineas.append(ln)
+            continue
+        actual = ""
+        for palabra in ln.split():
+            for trozo in (_cortar_palabra(palabra, font, size, ancho)
+                          if pdfmetrics.stringWidth(palabra, font, size) > ancho else [palabra]):
+                prueba = f"{actual} {trozo}".strip()
+                if actual and pdfmetrics.stringWidth(prueba, font, size) > ancho:
+                    lineas.append(actual)
+                    actual = trozo
+                else:
+                    actual = prueba
+        if actual:
+            lineas.append(actual)
+    return lineas
+
+
+def _palabra_max(texto, size, font="Slab"):
+    return max((pdfmetrics.stringWidth(p, font, size) for p in texto.split()), default=0)
+
+
 def _titular_lineas(texto, ancho, tipo):
     """Elige tamaño y cortes del titular. Devuelve (tamaño, [líneas])."""
+    if tipo == "cont":
+        size = int(15 * _esc())
+        return size, _partir(texto, "Slab", size, ancho)
+    # _partir y no simpleSplit: ninguna línea puede ser más ancha que el bloque
     if tipo == "lead":
         palabras = texto.split()
         if len(palabras) >= 4:
@@ -275,17 +415,21 @@ def _titular_lineas(texto, ancho, tipo):
             if size >= 24 * _esc():
                 return size, mejor[1]
         for size in range(int(34 * _esc()), int(19 * _esc()), -1):
-            lineas = simpleSplit(texto, "Slab", size, ancho)
+            if _palabra_max(texto, size) > ancho:      # antes achicar que partir una palabra
+                continue
+            lineas = _partir(texto, "Slab", size, ancho)
             if len(lineas) <= 3:
                 return size, lineas
-        return int(20 * _esc()), simpleSplit(texto, "Slab", int(20 * _esc()), ancho)
+        return int(20 * _esc()), _partir(texto, "Slab", int(20 * _esc()), ancho)
     rango, maxl = ((int(26 * _esc()), int(15 * _esc())), 3) if tipo == "sec" else \
         ((int(19 * _esc()), int(12 * _esc())), 5)
     for size in range(rango[0], rango[1] - 1, -1):
-        lineas = simpleSplit(texto, "Slab", size, ancho)
+        if size > rango[1] and _palabra_max(texto, size) > ancho:
+            continue
+        lineas = _partir(texto, "Slab", size, ancho)
         if len(lineas) <= (2 if size > rango[0] - 4 else maxl):
             return size, lineas
-    return rango[1], simpleSplit(texto, "Slab", rango[1], ancho)
+    return rango[1], _partir(texto, "Slab", rango[1], ancho)
 
 
 @lru_cache(maxsize=256)
@@ -307,10 +451,13 @@ def _recorte(ruta, w, h):
     return ImageReader(buf)
 
 
-def _layout(art, ancho, ncols, tipo, st, alto_cuerpo=None, foto_extra=0.0, seccion=None):
+def _layout(art, ancho, ncols, tipo, st, alto_cuerpo=None, foto_extra=0.0, seccion=None, alto_total=None,
+            resto=None):
     """Arma una nota en un bloque de 'ancho' con 'ncols' columnas de texto.
     Devuelve (alto_total, ops) donde ops dibujan relativo a la esquina superior izquierda.
-    Si alto_cuerpo es None, busca el mínimo alto en que entra todo el texto."""
+    Si alto_cuerpo es None, busca el mínimo alto en que entra todo el texto.
+    alto_total fija el alto del bloque entero: lo que no entra se agrega a la lista 'resto'
+    (para seguir la nota en la página siguiente)."""
     ops = []
     cw = (ancho - (ncols - 1) * GUT) / ncols
     d = 0.0
@@ -335,7 +482,7 @@ def _layout(art, ancho, ncols, tipo, st, alto_cuerpo=None, foto_extra=0.0, secci
         d += lead
     d += 5 if tipo != "side" else 4
     # foto
-    tiene_foto = bool(art["img"])
+    tiene_foto = bool(art["img"]) and tipo != "cont"
     if ncols >= 3:
         fx, fw = cw + GUT, ancho - cw - GUT
     else:
@@ -344,7 +491,7 @@ def _layout(art, ancho, ncols, tipo, st, alto_cuerpo=None, foto_extra=0.0, secci
     cap_ops, cap_h = [], 0.0
     if tiene_foto:
         base = fw * (0.58 if ncols >= 2 else 0.68)
-        fh = min(base + foto_extra, fw * (0.80 if ncols >= 2 else 1.0))
+        fh = max(min(base + foto_extra, fw * (0.80 if ncols >= 2 else 1.0)), fw * 0.34)
         if art["pie"]:
             cap = Paragraph(CUADRITO + _x(art["pie"]), st["caption"])
             _, cap_h = cap.wrap(fw, 100)
@@ -373,12 +520,20 @@ def _layout(art, ancho, ncols, tipo, st, alto_cuerpo=None, foto_extra=0.0, secci
             rs.append((x, top, cw, d + hb - top))
         return rs
 
+    paras = _parrafos(art, st)
+    med = _medidas(art, paras, cw)
+
     def entra(hb):
-        _, sobra = _fluir(_parrafos(art, st), rects(hb))
-        return not sobra
+        return _simular(med, rects(hb))
 
     minimo = (fh + cap_h + 2 * 11) if tiene_foto else 11
-    if alto_cuerpo is None:
+    sigue = None
+    if alto_total is not None:            # bloque de alto fijo (nota larga partida en varias páginas)
+        hb = max(alto_total - d, minimo)
+        if not entra(hb):
+            sigue = Paragraph("<i>Sigue en la página siguiente »</i>", st["byline"])
+            hb -= 12                       # una línea abajo para el aviso de continuación
+    elif alto_cuerpo is None:
         lo, hi = minimo, 3000.0
         if not entra(hi):
             hi = 6000.0
@@ -391,7 +546,16 @@ def _layout(art, ancho, ncols, tipo, st, alto_cuerpo=None, foto_extra=0.0, secci
         hb = hi
     else:
         hb = max(alto_cuerpo, minimo)
-    puestos, _ = _fluir(_parrafos(art, st), rects(hb))
+    puestos, sobra = _fluir(paras, rects(hb))
+    # la simulación cuenta líneas; si el reparto real difiere en algo, se agranda hasta que entre todo
+    while sobra and sigue is None and hb < 6000:
+        hb += 2
+        puestos, sobra = _fluir(_parrafos(art, st), rects(hb))
+    if sigue is not None:
+        if resto is not None:
+            resto.extend(sobra)
+        _, hs = sigue.wrap(cw, 20)
+        ops.append(("flow", sigue, (ncols - 1) * (cw + GUT), d + hb + 12 - hs, hs))
     if firma is not None:
         ops.append(("flow", firma, 0, d, firma_h - 6))
     if tiene_foto:
@@ -399,8 +563,9 @@ def _layout(art, ancho, ncols, tipo, st, alto_cuerpo=None, foto_extra=0.0, secci
         ops += cap_ops
     for p, x, y, h in puestos:
         ops.append(("flow", p, x, y, h))
-    ops.append(("anchor", art["gid"], 0, 0))
-    return d + hb, ops
+    if not art.get("_cont"):
+        ops.append(("anchor", art["gid"], 0, 0))
+    return d + hb + (12 if sigue is not None else 0), ops
 
 
 def _medir(art, ancho, ncols, tipo, st, alto_max=None, seccion=None):
@@ -498,11 +663,37 @@ class _Pagina:
         return self.main[0][0]["ambito"] if self.main else "NOTICIAS"
 
 
+VENTANA = 20          # cuántas notas de la cola se prueban para llenar el espacio que queda en una página
+
+
+def _continuar(paginas, a, resto, st):
+    """Nota más larga que una página: sigue a 4 columnas en las páginas siguientes."""
+    desde = paginas[-1].n
+    while resto:
+        pg = _Pagina(len(paginas) + 2)
+        paginas.append(pg)
+        cont = dict(a, _flow=list(resto), _cont=True, _med={}, img=None, act=False,
+                    ante=f"VIENE DE LA PÁGINA {desde}")
+        resto.clear()
+        h, ops = _layout(cont, W - 2 * M, 4, "cont", st, alto_total=pg.alto, resto=resto)
+        pg.full = (cont, h, ops)
+        desde = pg.n
+
+
 def _paginar(arts, st, fijas=None):
     """fijas: {gid: página} elegidas en la vista previa ("Mover a la página", "Añadir aquí")."""
     fijas = fijas or {}
     paginas = []
     cola = list(arts)
+    memo = {}
+
+    def lay(b, ancho, ncols, tipo, seccion=None, foto_extra=0.0):
+        # la misma nota se prueba en muchas páginas con la misma geometría: se arma una sola vez
+        clave = (b["gid"], round(ancho, 2), ncols, tipo, seccion if seccion != b["ambito"] else None, foto_extra)
+        if clave not in memo:
+            memo[clave] = _layout(b, ancho, ncols, tipo, st, seccion=seccion, foto_extra=foto_extra)
+        return memo[clave]
+
     while cola:
         n = len(paginas) + 2                      # la 1 es la portada
         pg = _Pagina(n, portada=not paginas)
@@ -516,51 +707,63 @@ def _paginar(arts, st, fijas=None):
             cola = luego
         # nota principal de la página
         a = cola.pop(0)
-        h, ops = _layout(a, pg.w_main, 3, "lead", st)
+        h, ops = lay(a, pg.w_main, 3, "lead")
         if h <= pg.alto:
             pg.main.append((a, h, ops))
-        elif not pg.portada:
-            h, ops = _layout(a, W - 2 * M, 4, "lead", st)
-            pg.full = (a, h, ops)
-            continue
         else:
-            pg.main.append((a, h, ops))   # no debería pasar: notas muy largas
+            # no entra a 3 columnas: a toda la página (4 columnas); si tampoco, sigue en las siguientes
+            sobra = []
+            a["_partida"] = True
+            if pg.portada:
+                h, ops = _layout(a, pg.w_main, 3, "lead", st, alto_total=pg.alto, resto=sobra)
+                pg.main.append((a, h, ops))
+            else:
+                h, ops = lay(a, W - 2 * M, 4, "lead")
+                if h > pg.alto:
+                    h, ops = _layout(a, W - 2 * M, 4, "lead", st, alto_total=pg.alto, resto=sobra)
+                pg.full = (a, h, ops)
+            _continuar(paginas, a, sobra, st)
             continue
-        # resto: corta -> columna lateral; larga -> zona principal
-        while True:
-            puesto = False
-            for i, b in enumerate(cola[:8]):
-                if fijas.get(b["gid"], 0) > n:      # fijada a otra página más adelante
-                    continue
-                opciones = []
-                if not pg.portada:
-                    hs, ops_s = _layout(b, CW, 1, "side", st, seccion=a["ambito"])
-                    if hs <= pg.libre_lat():
-                        opciones.append(("lat", hs, ops_s))
-                hm, ops_m = _layout(b, pg.w_main, 3, "sec", st, seccion=a["ambito"])
-                if hm <= pg.libre_main():
-                    opciones.append(("main", hm, ops_m))
-                if not opciones:
-                    continue
-                corta = b["palabras"] < 170 or not b["img"]
-                opciones.sort(key=lambda o: 0 if (o[0] == "lat") == corta else 1)
-                dest, hh, oo = opciones[0]
-                (pg.lat if dest == "lat" else pg.main).append((b, hh, oo))
-                cola.pop(i)
-                puesto = True
-                break
-            if not puesto:
-                break
+        # resto: corta -> columna lateral; larga -> zona principal.
+        # 2.ª pasada: si nada entra, se prueba con la foto más baja antes de dejar el hueco
+        for extra_foto in (0.0, -pg.w_main):
+            while True:
+                puesto = False
+                for i, b in enumerate(cola[:VENTANA]):
+                    if fijas.get(b["gid"], 0) > n:      # fijada a otra página más adelante
+                        continue
+                    if extra_foto and not b["img"]:
+                        continue
+                    opciones = []
+                    if not pg.portada and not extra_foto:
+                        hs, ops_s = lay(b, CW, 1, "side", a["ambito"])
+                        if hs <= pg.libre_lat():
+                            opciones.append(("lat", hs, ops_s))
+                    hm, ops_m = lay(b, pg.w_main, 3, "sec", a["ambito"], extra_foto)
+                    if hm <= pg.libre_main():
+                        opciones.append(("main", hm, ops_m))
+                    if not opciones:
+                        continue
+                    corta = b["palabras"] < 170 or not b["img"]
+                    opciones.sort(key=lambda o: 0 if (o[0] == "lat") == corta else 1)
+                    dest, hh, oo = opciones[0]
+                    (pg.lat if dest == "lat" else pg.main).append((b, hh, oo))
+                    cola.pop(i)
+                    puesto = True
+                    break
+                if not puesto:
+                    break
     # aprovechar el espacio sobrante: agrandar la foto de la última nota de cada pila
     for pg in paginas:
         for pila, ancho, ncols, libre in ((pg.main, pg.w_main, 3, pg.libre_main), (pg.lat, CW, 1, pg.libre_lat)):
             if pila:
                 a, h, ops = pila[-1]
                 extra = libre() + GAP
-                if extra > 30 and a["img"]:
+                if extra > 30 and a["img"] and not a.get("_partida"):
                     tipo = "side" if ncols == 1 else ("lead" if len(pila) == 1 else "sec")
                     h2, ops2 = _medir(a, ancho, ncols, tipo, st, h + extra, seccion=pg.seccion())
-                    pila[-1] = (a, h2, ops2)
+                    if h <= h2 <= h + extra + 0.5:
+                        pila[-1] = (a, h2, ops2)
     return paginas
 
 
@@ -694,9 +897,31 @@ def _portada_lateral(c, pg, arts, paginas_de, numero, ahora, st, anclas_links):
         if alto <= disponible:
             break
         filas, alto = indice(size)
-    while alto > disponible and len(filas) > 2:   # recorta y avisa
+    # si no entra todo, se recorta y se avisa cuántas noticias faltan y en qué páginas están
+    quitadas = []
+    while alto > disponible and len(filas) > 2:
         f = filas.pop()
         alto -= f[1]
+        if f[2]:
+            quitadas.append(f[2])
+    if quitadas:
+        def aviso(gids):
+            pags = sorted({paginas_de.get(g) for g in gids if paginas_de.get(g)})
+            rango = f" (págs. {pags[0]}–{pags[-1]})" if len(pags) > 1 else (f" (pág. {pags[0]})" if pags else "")
+            nn = len(gids)
+            return Paragraph(f'<i>… y {nn} noticia{"s" if nn > 1 else ""} más{rango}</i>',
+                             ParagraphStyle("im", parent=st["idx"], textColor=AZUL))
+        nota = aviso(quitadas)
+        _, hn = nota.wrap(w, 60)
+        while (alto + hn + 3 > disponible or (filas and filas[-1][2] is None)) and len(filas) > 2:
+            f = filas.pop()               # sitio para el aviso (y sin títulos de sección huérfanos)
+            alto -= f[1]
+            if f[2]:
+                quitadas.append(f[2])
+        nota = aviso(quitadas)
+        _, hn = nota.wrap(w, 60)
+        filas.append((nota, hn + 3, None))
+        alto += hn + 3
     panel_h = max(panel_min, y - BOTTOM - ch - 20 - 34 - alto)
 
     # panel azul con la sección en vertical
@@ -777,9 +1002,14 @@ def _ficha(c, arts, paginas_de, numero, st):
             vers = "; ".join(f"<b>{_x(v.get('medio', ''))}</b>: {_x(v.get('dice', ''))}" for v in d.get("versiones", []))
             story.append(Paragraph(f'<font color="{D["colores"]["alerta"]}"><b>Difieren:</b></font> {_x(d.get("aspecto", ""))} — {vers}',
                                    st["v"]))
+    primera = True
     while story:
         c.showPage()
         _pie(c, numero)
+        if primera:
+            c.bookmarkPage("ficha")
+            c.addOutlineEntry("Ficha de verificación (interna)", "ficha", level=0)
+            primera = False
         f = Frame(M, BOTTOM, W - 2 * M, TOP - BOTTOM, showBoundary=0)
         antes = len(story)
         f.addFromList(story, c)
@@ -817,11 +1047,16 @@ def _zona(pag, a, rect):
         portada.ZONAS.append({"pag": pag, "gid": a["gid"], "rect": [round(v, 1) for v in rect], "lugar": None})
 
 
+def _corto(t, n=80):
+    return t if len(t) <= n else t[:n - 1].rsplit(" ", 1)[0] + "…"
+
+
 def _render(destino, arts, paginas, numero, ahora, st, cfg):
     paginas_de = {}
     for pg in paginas:
         for a, _, _ in pg.main + pg.lat + ([pg.full] if pg.full else []):
-            paginas_de[a["gid"]] = pg.n
+            if not a.get("_cont"):             # una nota partida se indexa en su primera página
+                paginas_de[a["gid"]] = pg.n
     c = Canvas(str(destino), pagesize=A4)
     c.setTitle(f"Altiplano al Día — Boletín N° {numero}")
     c.setAuthor("Altiplano al Día")
@@ -829,6 +1064,9 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
     anclas, links = set(), []
     orden_indice = sorted(arts, key=lambda a: (paginas_de.get(a["gid"], 999)))
     from . import portada
+    # marcadores del PDF: Portada, y cada página (con su sección) con sus noticias dentro
+    c.bookmarkPage("p1")
+    c.addOutlineEntry("Portada", "p1", level=0)
     portada.dibujar(c, cfg, arts, paginas_de, numero, ahora, {
         "AZUL": AZUL, "AZUL_CLARO": AZUL_CLARO, "AMARILLO": AMARILLO, "NEGRO": NEGRO, "W": W, "H": H,
         "recorte": _recorte, "icono": _icono, "logo": _logo, "logo_blanco": _logo_blanco, "ROJO": ROJO, "fecha_larga": _fecha_larga, "plano": _plano})
@@ -841,18 +1079,21 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
         else:
             _cabecera(c, pg, fecha_txt)
         _pie(c, numero)
+        c.bookmarkPage(f"p{pg.n}")
+        c.addOutlineEntry(f"Pág. {pg.n} · {pg.seccion().capitalize()}", f"p{pg.n}", level=0)
         if pg.full:
             a, h, ops = pg.full
             _dibujar(c, ops, M, pg.top, anclas)
             _zona(pg.n, a, (M, pg.top - h, W - M, pg.top))
-            c.addOutlineEntry(a["titular"][:80], f"g{a['gid']}", level=0)
+            if not a.get("_cont"):
+                c.addOutlineEntry(_corto(a["titular"]), f"g{a['gid']}", level=1)
             continue
         for pila, x, ancho in ((pg.main, pg.x_main, pg.w_main), (pg.lat, pg.x_lat, CW)):
             y = pg.top
             for i, (a, h, ops) in enumerate(pila):
                 _dibujar(c, ops, x, y, anclas)
                 _zona(pg.n, a, (x, y - h, x + ancho, y))
-                c.addOutlineEntry(a["titular"][:80], f"g{a['gid']}", level=0)
+                c.addOutlineEntry(_corto(a["titular"]), f"g{a['gid']}", level=1)
                 y -= h
                 if i < len(pila) - 1:
                     _filete_h(c, x, x + ancho, y - GAP / 2)
@@ -876,7 +1117,7 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
                 if y_hueco - BOTTOM > 70:
                     clave = f"{pg.n}:{'lat' if pila is pg.lat else 'main'}"
                     alto_h = y_hueco - BOTTOM - 4
-                    av, _ = asignador.para(clave, alto_h)
+                    av, _ = asignador.para(clave, alto_h, ancho)
                     if av:
                         # el aviso va abajo; si sobra mucho espacio arriba, queda libre para una noticia
                         alto_av = min(alto_h, 230 if pila is pg.lat else 170)
@@ -901,6 +1142,11 @@ def generar_consolidado(cfg: dict, grupos=None, destino=None, registrar=True, nu
     grupos = list(grupos if grupos is not None else storage.grupos_para_pdf())
     if not grupos:
         return None
+    with _GENERANDO:
+        return _generar(cfg, grupos, destino, registrar, numero, ahora)
+
+
+def _generar(cfg, grupos, destino, registrar, numero, ahora):
     _aplicar_diseno()
     st = _st()
     arts = _ordenar([_articulo(g, cfg) for g in grupos], cfg)
@@ -914,10 +1160,12 @@ def generar_consolidado(cfg: dict, grupos=None, destino=None, registrar=True, nu
             destino = CONSOLIDADOS_DIR / f"{ahora:%Y-%m-%d_%H%M%S}.pdf"
     from . import portada
     portada.ZONAS = []
+    portada.AVISOS = []
     try:
         _render(destino, arts, paginas, numero, ahora, st, cfg)
         # mapa de zonas para la vista previa interactiva (qué noticia hay en cada lugar de cada página)
         mapa = {"ancho": W, "alto": H, "zonas": portada.ZONAS,
+                "avisos": list(portada.AVISOS),
                 "titulares": {str(a["gid"]): a["titular"] for a in arts}}
         Path(str(destino)).with_suffix(".json").write_text(json.dumps(mapa, ensure_ascii=False), encoding="utf-8")
     finally:

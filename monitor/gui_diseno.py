@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import colorchooser, messagebox, ttk
 
 from . import diseno
+from .gui_inicio import enganchar_rueda
 
 F = "Segoe UI"
 MUTED = "#6B7280"
@@ -22,12 +23,11 @@ class _Scroll(tk.Frame):
         self._win = self.cv.create_window(0, 0, window=self.dentro, anchor="nw")
         self.dentro.bind("<Configure>", lambda e: self.cv.configure(scrollregion=self.cv.bbox("all")))
         self.cv.bind("<Configure>", lambda e: self.cv.itemconfigure(self._win, width=e.width))
-        for w in (self.cv, self.dentro):
-            w.bind("<Enter>", lambda e: self.cv.bind_all("<MouseWheel>", self._rueda))
-            w.bind("<Leave>", lambda e: self.cv.unbind_all("<MouseWheel>"))
 
-    def _rueda(self, e):
-        self.cv.yview_scroll(-e.delta // 120, "units")
+    def enganchar(self):
+        """La rueda desplaza el panel también sobre los campos, y ya NO cambia letras ni tamaños sin querer
+        (antes, al desplazar sobre una lista o casilla numérica se cambiaba su valor)."""
+        enganchar_rueda(self.cv, self.cv)
 
 
 class PanelDiseno(tk.Frame):
@@ -54,6 +54,11 @@ class PanelDiseno(tk.Frame):
         tk.Label(pre, text="Cambia colores y letras de una vez (tus textos se mantienen).", bg="#FFFFFF",
                  fg=MUTED, font=(F, 8)).pack(anchor="w")
 
+        # botones primero, abajo: «Aplicar» queda visible aunque la pantalla sea baja
+        pie = tk.Frame(self, bg="#FFFFFF")
+        pie.pack(side="bottom", fill="x", padx=10, pady=8)
+        ttk.Button(pie, text="✔ Aplicar y ver", style="Accent.TButton", command=self._aplicar).pack(fill="x")
+        ttk.Button(pie, text="Volver al diseño original", command=self._restablecer).pack(fill="x", pady=(4, 0))
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=6, pady=4)
         self.t_textos, self.t_colores, self.t_letras = _Scroll(nb), _Scroll(nb), _Scroll(nb)
@@ -62,11 +67,6 @@ class PanelDiseno(tk.Frame):
         nb.add(self.t_colores, text="Colores")
         nb.add(self.t_letras, text="Letras")
         nb.add(self.t_portada, text="Portada")
-
-        pie = tk.Frame(self, bg="#FFFFFF")
-        pie.pack(fill="x", padx=10, pady=8)
-        ttk.Button(pie, text="✔ Aplicar y ver", style="Accent.TButton", command=self._aplicar).pack(fill="x")
-        ttk.Button(pie, text="Volver al diseño original", command=self._restablecer).pack(fill="x", pady=(4, 0))
         self._llenar()
 
     # ------------------------------------------------------------------
@@ -112,6 +112,7 @@ class PanelDiseno(tk.Frame):
         tk.Label(self.t_letras.dentro, text="Tamaños", bg="#FFFFFF", fg="#16324F",
                  font=(F, 9, "bold")).pack(anchor="w", padx=8, pady=(12, 2))
         self.s_tam = {}
+        self._rangos = {}
         for clave, nombre, de, a, paso in (("texto", "Texto de las noticias (pt)", 7, 13, 0.5),
                                            ("antetitulo", "Antetítulos (pt)", 8, 16, 0.5),
                                            ("pie_foto", "Pies de foto (pt)", 6, 11, 0.2),
@@ -123,6 +124,7 @@ class PanelDiseno(tk.Frame):
             sp.set(d["tamanos"].get(clave))
             sp.pack(side="right")
             self.s_tam[clave] = sp
+            self._rangos[clave] = (nombre, de, a)
         # portada: letras y tamaños de cada parte
         P = self.t_portada.dentro
         tk.Label(P, text="Tipografía de cada parte de la portada", bg="#FFFFFF", fg="#16324F",
@@ -145,6 +147,9 @@ class PanelDiseno(tk.Frame):
             sp.set(d["tamanos"].get(clave))
             sp.pack(side="right")
             self.s_tam[clave] = sp
+            self._rangos[clave] = (nombre, de, a)
+        for t in (self.t_textos, self.t_colores, self.t_letras, self.t_portada):
+            t.enganchar()
 
     def _fila_color(self, padre, etiqueta, destino, clave):
         f = tk.Frame(padre, bg="#FFFFFF")
@@ -164,8 +169,9 @@ class PanelDiseno(tk.Frame):
         for w in (muestra, lbl):
             w.bind("<Button-1>", elegir)
 
-    def _leer(self):
+    def _leer(self, avisar=False):
         d = diseno.cargar()
+        malos = []
         for clave, e in self.e_textos.items():
             d["textos"][clave] = e.get()
         d["colores"].update(self.colores)
@@ -173,14 +179,23 @@ class PanelDiseno(tk.Frame):
         for rol, cb in self.c_fuentes.items():
             d["fuentes"][rol] = cb.get()
         for clave, sp in self.s_tam.items():
+            nombre, de, a = self._rangos.get(clave, (clave, None, None))
             try:
-                d["tamanos"][clave] = float(sp.get())
+                v = float(sp.get().replace(",", "."))
             except ValueError:
-                pass
+                malos.append(f"• {nombre}: «{sp.get()}» no es un número (se deja como estaba)")
+                continue
+            if de is not None and not de <= v <= a:
+                malos.append(f"• {nombre}: va de {de:g} a {a:g}; se usó {min(max(v, de), a):g}")
+                v = min(max(v, de), a)
+                sp.set(f"{v:g}")
+            d["tamanos"][clave] = v
+        if malos and avisar:
+            messagebox.showwarning("Diseño", "Revisa estos tamaños:\n\n" + "\n".join(malos), parent=self)
         return d
 
     def _aplicar(self):
-        self.d = self._leer()
+        self.d = self._leer(avisar=True)
         diseno.guardar(self.d)
         self.al_aplicar("Diseño aplicado.")
 

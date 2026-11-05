@@ -59,24 +59,56 @@ POSTS_EXTRA = {"ambito": "TEXT", "tema": "TEXT", "grupo_id": "INTEGER", "resumen
                "consolidado_n": "INTEGER", "imagen": "TEXT"}
 
 
+class _Conexion(sqlite3.Connection):
+    """Conexión que, usada con «with», confirma (o deshace) Y ADEMÁS se cierra.
+    El «with» de sqlite3 normal solo hace commit y deja la conexión abierta."""
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return super().__exit__(exc_type, exc, tb)
+        finally:
+            self.close()
+
+
 def _conn():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(DB_PATH, timeout=15)
+    # timeout = espera ante «database is locked» (hilo de revisión + GUI escriben a la vez)
+    c = sqlite3.connect(DB_PATH, timeout=30, factory=_Conexion)
     c.row_factory = sqlite3.Row
     return c
 
 
+def _add_column(c, tabla, col, typ):
+    """ALTER TABLE idempotente (si otro hilo ya la agregó, no falla)."""
+    try:
+        c.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {typ}")
+    except sqlite3.OperationalError as e:
+        if "duplicate column" not in str(e).lower():
+            raise
+
+
 def init_db():
     with _conn() as c:
+        try:
+            # WAL: la GUI puede leer mientras el hilo de revisión escribe (menos «database is locked»).
+            # Es persistente en el archivo; si el disco no lo admite, se sigue en modo normal.
+            c.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.DatabaseError:
+            pass
         c.executescript(SCHEMA)
         cols = {r["name"] for r in c.execute("PRAGMA table_info(posts)")}
         for col, typ in POSTS_EXTRA.items():
             if col not in cols:
-                c.execute(f"ALTER TABLE posts ADD COLUMN {col} {typ}")
-        c.execute("CREATE INDEX IF NOT EXISTS ix_grupo ON posts(grupo_id)")
+                _add_column(c, "posts", col, typ)
         gcols = {r["name"] for r in c.execute("PRAGMA table_info(grupos)")}
         if "en_periodico" not in gcols:   # 1 = va al periódico, 0 = la excluyó el editor
-            c.execute("ALTER TABLE grupos ADD COLUMN en_periodico INTEGER DEFAULT 1")
+            _add_column(c, "grupos", "en_periodico", "INTEGER DEFAULT 1")
+        # índices de las columnas usadas en WHERE / ORDER BY (idempotentes)
+        c.execute("CREATE INDEX IF NOT EXISTS ix_grupo ON posts(grupo_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_estado ON posts(estado)")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_g_estado_pdf ON grupos(estado_pdf)")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_g_ultimo_pdf ON grupos(ultimo_pdf)")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_g_nota_pend ON grupos(nota_pendiente)")
 
 
 def now_iso():
@@ -103,9 +135,10 @@ def page_has_history(pagina: str) -> bool:
         return c.execute("SELECT 1 FROM posts WHERE pagina=? LIMIT 1", (pagina,)).fetchone() is not None
 
 
-def insert_post(p: dict, estado: str) -> None:
+def insert_post(p: dict, estado: str) -> bool:
+    """Inserta el post; devuelve False si ya existía (mismo id)."""
     with _conn() as c:
-        c.execute(
+        cur = c.execute(
             """INSERT OR IGNORE INTO posts
                (id, text_hash, pagina, permalink, enlace_ext, texto, publicado, detectado, estado, visto)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
@@ -114,11 +147,14 @@ def insert_post(p: dict, estado: str) -> None:
                 p.get("texto"), p.get("publicado"), now_iso(), estado, 1 if estado == "base" else 0,
             ),
         )
+        return cur.rowcount == 1
 
 
 def update_post(post_id: str, **fields) -> None:
     if "ia_json" in fields and not isinstance(fields["ia_json"], str):
         fields["ia_json"] = json.dumps(fields["ia_json"], ensure_ascii=False)
+    if not fields:
+        return
     cols = ", ".join(f"{k}=?" for k in fields)
     with _conn() as c:
         c.execute(f"UPDATE posts SET {cols} WHERE id=?", (*fields.values(), post_id))
@@ -211,6 +247,8 @@ def grupos_con_nota_pendiente():
 def actualizar_grupo(gid, **fields):
     if "nota_json" in fields and not isinstance(fields["nota_json"], str):
         fields["nota_json"] = json.dumps(fields["nota_json"], ensure_ascii=False)
+    if not fields:
+        return
     cols = ", ".join(f"{k}=?" for k in fields)
     with _conn() as c:
         c.execute(f"UPDATE grupos SET {cols} WHERE id=?", (*fields.values(), gid))

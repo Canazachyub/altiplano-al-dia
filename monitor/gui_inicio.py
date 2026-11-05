@@ -47,6 +47,22 @@ class Tip:
             self.top = None
 
 
+def enganchar_rueda(widget, canvas):
+    """La rueda del mouse sobre widget (y todo lo que tiene dentro) desplaza canvas.
+    En listas desplegables y casillas numéricas la rueda NO cambia el valor (se cambiaba sin querer
+    al desplazar el panel)."""
+    def rueda(e):
+        canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+        return "break"
+    pila = [widget]
+    while pila:
+        w = pila.pop()
+        pila.extend(w.winfo_children())
+        if isinstance(w, tk.Text):        # los cuadros de texto conservan su propio desplazamiento
+            continue
+        w.bind("<MouseWheel>", rueda)
+
+
 def sesion_facebook_guardada() -> bool:
     return any((PROFILE_DIR / "Default" / sub / "Cookies").exists() for sub in ("Network", ""))
 
@@ -68,10 +84,12 @@ class Paso(tk.Frame):
         self.estado.pack(anchor="w", padx=16, pady=(12, 2))
         self.detalle = tk.Label(self, text="", bg=PANEL, fg=MUTED, font=(F, 9), wraplength=260, justify="left")
         self.detalle.pack(anchor="w", padx=16)
+        # los botones se empaquetan ANTES que la lista: en pantallas bajas se recorta la lista, no los botones
+        self.botones = tk.Frame(self, bg=PANEL)
+        # justo después de la cabecera en el orden de empaque: lo primero que se recorta es el texto
+        self.botones.pack(side="bottom", fill="x", padx=16, pady=14, after=cab)
         self.contenido = tk.Frame(self, bg=PANEL)
         self.contenido.pack(fill="both", expand=True, padx=16, pady=(12, 0))
-        self.botones = tk.Frame(self, bg=PANEL)
-        self.botones.pack(side="bottom", fill="x", padx=16, pady=14)
 
     def boton(self, texto, cmd, principal=False, ayuda=""):
         b = ttk.Button(self.botones, text=texto, command=cmd, style="Accent.TButton" if principal else "TButton")
@@ -296,12 +314,19 @@ class InicioTab(ttk.Frame):
                      font=(F, 9, "italic")).pack(anchor="w")
             return
         try:
-            import pypdfium2 as pdfium
-            from PIL import ImageTk
-            doc = pdfium.PdfDocument(str(ruta))
-            im = doc[0].render(scale=0.2).to_pil()
-            doc.close()
-            self._mini = ImageTk.PhotoImage(im)
+            clave = (str(ruta), ruta.stat().st_mtime)
+            if getattr(self, "_mini_clave", None) != clave:   # (se refresca cada 10 s: no re-dibujar el PDF)
+                import pypdfium2 as pdfium
+                from PIL import ImageTk
+                doc = pdfium.PdfDocument(str(ruta))
+                try:
+                    pag = doc[0]
+                    im = pag.render(scale=0.2).to_pil()
+                    pag.close()
+                finally:
+                    doc.close()                      # (si queda abierto, Windows bloquea el PDF)
+                self._mini = ImageTk.PhotoImage(im)
+                self._mini_clave = clave
         except Exception:  # noqa: BLE001
             return
         tk.Label(paso.contenido, text=rotulo, bg=PANEL, fg=MUTED, font=(F, 8)).pack(anchor="w")

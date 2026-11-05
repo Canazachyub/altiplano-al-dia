@@ -1,7 +1,9 @@
 """Rutas, configuración JSON y API keys (.env)."""
+import copy
 import json
 import os
 import re
+import shutil
 import threading
 from pathlib import Path
 
@@ -49,11 +51,32 @@ def nombre_medio(slug: str, cfg: dict | None = None) -> str:
 _lock = threading.Lock()
 
 
+CONFIG_BAK = CONFIG_PATH.with_name("config.json.bak")
+
+
+def _leer_json(path: Path) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path.name} no contiene un objeto JSON")
+    return data
+
+
 def load_config() -> dict:
     with _lock:
-        cfg = dict(DEFAULTS)
-        if CONFIG_PATH.exists():
-            cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+        # deepcopy: si no, las listas/dicts de DEFAULTS se comparten y se modifican entre llamadas
+        cfg = copy.deepcopy(DEFAULTS)
+        if not CONFIG_PATH.exists() and CONFIG_BAK.exists():
+            cfg.update(_leer_json(CONFIG_BAK))       # se cortó justo al guardar
+        elif CONFIG_PATH.exists():
+            try:
+                cfg.update(_leer_json(CONFIG_PATH))
+            except (ValueError, OSError):
+                # config.json dañado (p. ej. se cortó la luz al guardar): se usa la copia anterior.
+                # Si tampoco hay copia, se lanza el error: arrancar con la config vacía y guardarla
+                # borraría la lista de páginas del usuario.
+                if not CONFIG_BAK.exists():
+                    raise
+                cfg.update(_leer_json(CONFIG_BAK))
         # admite lista de strings por comodidad
         cfg["paginas"] = [
             p if isinstance(p, dict) else {"url": p, "activa": True}
@@ -63,8 +86,23 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
+    """Guarda de forma atómica (archivo temporal + reemplazo) y deja la versión anterior en .bak."""
     with _lock:
-        CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        texto = json.dumps(cfg, ensure_ascii=False, indent=2)
+        tmp = CONFIG_PATH.with_name("config.json.tmp")
+        tmp.write_text(texto, encoding="utf-8")
+        if CONFIG_PATH.exists():
+            try:
+                _leer_json(CONFIG_PATH)                 # solo se respalda si la actual es válida
+                shutil.copyfile(CONFIG_PATH, CONFIG_BAK)
+            except (ValueError, OSError):
+                pass
+        try:
+            os.replace(tmp, CONFIG_PATH)
+        except PermissionError:
+            # Windows: otro programa (antivirus, editor) tiene el archivo abierto un instante
+            CONFIG_PATH.write_text(texto, encoding="utf-8")
+            tmp.unlink(missing_ok=True)
 
 
 def page_slug(url: str) -> str:
@@ -86,8 +124,12 @@ KEY_NAMES = {"deepseek": "DEEPSEEK_API_KEY", "claude": "ANTHROPIC_API_KEY"}
 
 
 def get_api_key(provider: str) -> str:
+    """'' si no hay key (o si el proveedor no existe: antes lanzaba KeyError y cortaba la revisión)."""
+    nombre = KEY_NAMES.get((provider or "").strip().lower())
+    if not nombre:
+        return ""
     load_dotenv(ENV_PATH, override=True)
-    return os.getenv(KEY_NAMES[provider], "").strip()
+    return os.getenv(nombre, "").strip()
 
 
 def set_api_key(provider: str, value: str) -> None:
