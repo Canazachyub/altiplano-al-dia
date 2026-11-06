@@ -22,22 +22,30 @@ AVISOS_PATH = BASE_DIR / "data" / "avisos.json"
 IMG_AVISOS = BASE_DIR / "data" / "avisos"
 ICONOS = {"telefono": "Teléfono", "chat": "Mensaje", "megafono": "Megáfono", "camara": "Cámara", "": "Sin icono"}
 
+WHATSAPP = "+51 982 591 289"   # número público del periódico (denuncias, publicidad, noticias)
+GRANDE = 150                   # alto (pt) desde el que un espacio libre se ofrece como "Anúnciate aquí"
+
 DEFAULT = {
     "auto": True,             # rellenar solos los espacios libres con los avisos marcados "auto"
     "colocados": {},          # "pag:col" -> id de aviso (o "" para dejar el espacio vacío a propósito)
+    "borrados": [],           # avisos de fábrica que el usuario eliminó (no se vuelven a agregar)
     "avisos": [
+        {"id": "anunciate", "nombre": "Anúnciate aquí (espacios grandes)", "tipo": "texto", "auto": True,
+         "icono": "megafono", "titulo": "ANÚNCIATE AQUÍ",
+         "mensaje": "Este espacio puede ser tuyo. Publicidad, avisos y denuncias al WhatsApp",
+         "telefono": WHATSAPP, "imagen": "", "grande": True},
         {"id": "reporta", "nombre": "Reporta tu noticia", "tipo": "texto", "auto": True, "icono": "telefono",
          "titulo": "¿TIENES UNA NOTICIA?", "mensaje": "Repórtala o envíanos tu foto o video al WhatsApp",
-         "telefono": "", "imagen": ""},
+         "telefono": WHATSAPP, "imagen": ""},
         {"id": "anuncia", "nombre": "Anuncia con nosotros", "tipo": "texto", "auto": True, "icono": "megafono",
-         "titulo": "ANUNCIA CON NOSOTROS", "mensaje": "Llega a miles de lectores de Puno y la región. Llámanos al",
-         "telefono": "", "imagen": ""},
+         "titulo": "ANUNCIA CON NOSOTROS", "mensaje": "Llega a miles de lectores de Puno y la región. WhatsApp",
+         "telefono": WHATSAPP, "imagen": ""},
         {"id": "denuncia", "nombre": "Denuncia", "tipo": "texto", "auto": True, "icono": "chat",
-         "titulo": "¡DENÚNCIALO!", "mensaje": "¿Abusos, cobros indebidos u obras abandonadas? Escríbenos al",
-         "telefono": "", "imagen": ""},
+         "titulo": "¡DENÚNCIALO!", "mensaje": "¿Abusos, cobros indebidos u obras abandonadas? Escríbenos al WhatsApp",
+         "telefono": WHATSAPP, "imagen": ""},
         {"id": "foto", "nombre": "Envía tu foto", "tipo": "texto", "auto": False, "icono": "camara",
-         "titulo": "¿FUISTE TESTIGO?", "mensaje": "Envíanos tu foto y la publicamos con tu nombre",
-         "telefono": "", "imagen": ""},
+         "titulo": "¿FUISTE TESTIGO?", "mensaje": "Envíanos tu foto y la publicamos con tu nombre. WhatsApp",
+         "telefono": WHATSAPP, "imagen": ""},
     ],
 }
 
@@ -49,6 +57,15 @@ def cargar() -> dict:
         d = {}
     out = copy.deepcopy(DEFAULT)
     out.update({k: v for k, v in d.items() if k in out})
+    # avisos de fábrica nuevos (p. ej. "Anúnciate aquí") se agregan a una lista ya guardada
+    ids = {a["id"] for a in out["avisos"]}
+    for i, a in enumerate(DEFAULT["avisos"]):
+        if a["id"] not in ids and a["id"] not in out["borrados"]:
+            out["avisos"].insert(min(i, len(out["avisos"])), copy.deepcopy(a))
+    # sin número propio, los avisos de texto usan el WhatsApp del periódico
+    for a in out["avisos"]:
+        if a.get("tipo") != "imagen" and not (a.get("telefono") or "").strip():
+            a["telefono"] = WHATSAPP
     return out
 
 
@@ -102,8 +119,10 @@ class Asignador:
 
     def __init__(self):
         self.d = cargar()
-        self.rotacion = [a for a in self.d["avisos"] if a.get("auto") and listo(a)]
-        self.i = 0
+        listos = [a for a in self.d["avisos"] if a.get("auto") and listo(a)]
+        self.grandes = [a for a in listos if a.get("grande")]
+        self.rotacion = [a for a in listos if not a.get("grande")] or self.grandes
+        self.i = self.j = 0
 
     def para(self, clave: str, alto: float, ancho: float | None = None):
         """ancho (opcional): en un espacio ancho (zona principal) entra un aviso apaisado más bajo."""
@@ -113,6 +132,10 @@ class Asignador:
         minimo = 60 if (ancho or 0) >= 300 else 90
         if not self.d.get("auto") or not self.rotacion or alto < minimo:
             return None, False
+        if self.grandes and alto >= GRANDE:      # espacio grande: "Anúnciate aquí" con el WhatsApp
+            a = self.grandes[self.j % len(self.grandes)]
+            self.j += 1
+            return a, False
         a = self.rotacion[self.i % len(self.rotacion)]
         self.i += 1
         return a, False

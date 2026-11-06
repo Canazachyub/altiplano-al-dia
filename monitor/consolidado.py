@@ -1239,7 +1239,8 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
                     if av:
                         # el aviso va abajo; si sobra mucho espacio arriba, queda libre para una noticia
                         alto_av = min(alto_h, 230 if pila is pg.lat else 170)
-                        if alto_h - alto_av - GAP < 90:      # lo que sobraría arriba es poco: el aviso lo absorbe
+                        if av.get("grande") or alto_h - alto_av - GAP < 90:   # "Anúnciate aquí" ocupa todo el
+                            #                                       espacio; si sobra poco, el aviso lo absorbe
                             alto_av = alto_h
                         rect_av = (x, BOTTOM + 4, x + ancho, BOTTOM + 4 + alto_av)
                         avisos.dibujar(c, av, rect_av, D)

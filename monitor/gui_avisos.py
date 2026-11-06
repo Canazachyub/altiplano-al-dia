@@ -231,6 +231,7 @@ class GestorAvisos(tk.Toplevel):
             return
         aid = self.sel["id"]
         self.d["avisos"] = [a for a in self.d["avisos"] if a["id"] != aid]
+        self.d.setdefault("borrados", []).append(aid)    # que no vuelva como aviso de fábrica
         self.d["colocados"] = {k: v for k, v in self.d["colocados"].items() if v != aid}
         self.sel = None
         self._refrescar_lista(0)
