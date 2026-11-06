@@ -231,12 +231,17 @@ def recortar_franjas(im: Image.Image, umbral=7.0, minimo=0.55) -> Image.Image:
 
 # ------------------------------------------------------------------ paso del boletín
 def fotos_del_boletin():
-    """[(gid, ruta_original, impacto)] de las fotos que usaría el próximo boletín."""
+    """[(gid, ruta_original, impacto)] de las fotos que usaría el próximo boletín y de las noticias
+    marcadas 🌐 que todavía no se subieron a la web (también deben salir sin logos ni textos encima)."""
     from . import storage
     from .consolidado import imagen_original
     from .editorial import impacto
     out = []
-    for g in storage.grupos_para_pdf():
+    grupos = {g["id"]: g for g in storage.grupos_para_pdf()}
+    for g in storage.grupos_web():
+        if storage.estado_web(g) != "en_linea":
+            grupos.setdefault(g["id"], g)
+    for g in grupos.values():
         try:
             nota = json.loads(g["nota_json"])
         except (TypeError, ValueError):
@@ -248,6 +253,14 @@ def fotos_del_boletin():
             out.append((g["id"], ruta, impacto(nota)))
     out.sort(key=lambda x: -x[2])                         # primero las de más impacto (portada)
     return out
+
+
+def fotos_web_sin_revisar() -> int:
+    """Fotos de noticias pendientes de subir a la web que aún no pasaron por la limpieza."""
+    from . import storage
+    pend = {g["id"] for g in storage.grupos_web() if storage.estado_web(g) != "en_linea"}
+    return sum(1 for gid, ruta, _ in fotos_del_boletin()
+               if gid in pend and estado(ruta).get("estado") in (None, "error"))
 
 
 def paso_limpieza(cfg, emit, cancelar=None, forzar=False) -> dict:

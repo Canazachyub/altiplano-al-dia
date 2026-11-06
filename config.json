@@ -25,17 +25,18 @@
       "activa": true
     }
   ],
-  "intervalo_min": 5,
+  "intervalo_min": 15,
   "proveedor_ia": "deepseek",
   "modelo_deepseek": "deepseek-chat",
   "modelo_claude": "claude-sonnet-5-5",
-  "posts_por_revision": 5,
+  "posts_por_revision": 10,
   "procesar_en_primera_revision": 3,
   "navegador_canal": "chrome",
   "headless": false,
   "fase2_auto": true,
   "revision_automatica": false,
   "pdf_consolidado_auto": false,
+  "limpiar_fotos": true,
   "ventana_cruce_horas": 48,
   "ambitos": [
     "DISTRITAL",
@@ -64,5 +65,10 @@
     "OndaAzulPuno": "Radio Onda Azul",
     "larepublicape": "La República",
     "famatv27": "Fama TV"
-  }
+  },
+  "web_carpeta": "",
+  "web_repo": "",
+  "web_rama": "main",
+  "web_ruta": "public",
+  "web_url": ""
 }

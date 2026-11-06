@@ -42,6 +42,12 @@ DEFAULTS = {
     "temas": ["Política", "Deportes", "Economía", "Educación", "Salud", "Seguridad/Policiales",
               "Sociedad", "Cultura", "Medio ambiente", "Otros"],
     "nombres_medios": {},
+    # --- Web (sitio de Altiplano al Día)
+    "web_carpeta": "",              # carpeta 'public' del sitio en esta PC (vista local), opcional
+    "web_repo": "",                 # GitHub «usuario/repositorio» del sitio
+    "web_rama": "main",
+    "web_ruta": "public",           # carpeta del repositorio donde van data/, img/ y boletines/
+    "web_url": "",                  # dirección pública (https://altiplanoaldia.pe) para RSS y sitemap
 }
 
 
@@ -138,3 +144,16 @@ def set_api_key(provider: str, value: str) -> None:
         ENV_PATH.write_text("", encoding="utf-8")
     set_key(str(ENV_PATH), KEY_NAMES[provider], value.strip(), quote_mode="never")
     os.environ[KEY_NAMES[provider]] = value.strip()
+
+
+# ---------- token de GitHub (para subir la web) ----------
+def get_github_token() -> str:
+    load_dotenv(ENV_PATH, override=True)
+    return os.getenv("GITHUB_TOKEN", "").strip()
+
+
+def set_github_token(value: str) -> None:
+    if not ENV_PATH.exists():
+        ENV_PATH.write_text("", encoding="utf-8")
+    set_key(str(ENV_PATH), "GITHUB_TOKEN", value.strip(), quote_mode="never")
+    os.environ["GITHUB_TOKEN"] = value.strip()

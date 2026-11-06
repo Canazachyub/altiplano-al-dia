@@ -9,6 +9,7 @@
 import json
 import threading
 import tkinter as tk
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -66,19 +67,28 @@ def poner_seccion(gid, seccion):
     _guardar(gid, n)
 
 
-def crear_nota_propia(seccion, ante, titular, lugar, texto, foto=None, pag=None) -> int:
-    """Crea una noticia propia del diario (no viene de Facebook). Devuelve su id."""
+def crear_nota_propia(seccion, ante, titular, lugar, texto, foto=None, pag=None, video=None) -> int:
+    """Crea una noticia propia del diario (no viene de Facebook). Devuelve su id.
+    video: post de un video de Facebook del que salió la nota; queda unido a ella, y si se deja su
+    misma foto (la miniatura), la nota la usa con el crédito del medio y pasa por la limpieza."""
     parrafos = [p.strip() for p in texto.replace("\r", "").split("\n\n") if p.strip()] or [texto.strip()]
     nota = {"ANTETITULO": ante.strip(), "TITULAR": titular.strip(), "BAJADA": "", "LUGAR": lugar.strip(),
             "PIE_FOTO": "", "CUERPO": "\n\n".join(parrafos), "DATOS": [], "SECCION": seccion,
             "_SECCION_MANUAL": True, "_PROPIA": True, "IMPACTO": 6, "_origen": "propia",
             "LINKS": [], "_EDITADO": datetime.now().isoformat(timespec="seconds")}
-    if foto:
+    foto_video = bool(video is not None and foto and video["imagen"] and Path(foto) == Path(video["imagen"]))
+    if foto and not foto_video:
         nota["_IMAGEN"] = importar_foto(foto)
+    elif video is not None and not foto:
+        nota["_SIN_FOTO"] = True
+    if video is not None:
+        nota["_VIDEO"] = video["permalink"] or ""
     gid = storage.crear_grupo(AMBITO.get(seccion, "REGIONAL"), TEMA.get(seccion, "Sociedad"), titular.strip())
     storage.actualizar_grupo(gid, nota_json=json.dumps(nota, ensure_ascii=False), estado_pdf="nuevo",
                              en_periodico=1, fecha_hecho=storage.now_iso(), medios="Altiplano al Día",
                              n_fuentes=0, nota_pendiente=0, titular=titular.strip())
+    if video is not None:
+        storage.video_con_nota(video["id"], gid)
     if pag:
         fijas = consolidado.leer_fijas()
         fijas[gid] = pag
@@ -103,19 +113,38 @@ def cupos_y_llenos(mapa) -> list:
 class NotaPropia(tk.Toplevel):
     """Formulario para escribir una nota propia (o pegar un borrador) y ponerla en el periódico."""
 
-    def __init__(self, vista, pag=None, seccion=None, rol=None):
+    def __init__(self, vista, pag=None, seccion=None, rol=None, video=None, al_guardar=None):
+        """vista: la vista previa (o la ventana principal, si se abre desde 🎬 Videos).
+        video: post de un video de Facebook; su texto llega como borrador y su miniatura como foto."""
         super().__init__(vista)
+        from .config import nombre_medio
         from .editor import ajustar_ventana
         from .maqueta import LARGO, NOTICIAS
-        self.vista, self.pag, self.rol = vista, pag, rol
-        self.title("Nota propia — Altiplano al Día" + (f" (página {pag})" if pag else ""))
+        self.vista, self.pag, self.rol, self.video, self.al_guardar = vista, pag, rol, video, al_guardar
+        self.app = getattr(vista, "app", vista)
+        self.title(("Nota desde un video" if video is not None else "Nota propia") + " — Altiplano al Día"
+                   + (f" (página {pag})" if pag else ""))
         ajustar_ventana(self, 820, 720)
         self.transient(vista)
-        self.foto = None
+        self.foto = video["imagen"] if video is not None and video["imagen"] else None
         f = ttk.Frame(self, padding=12)
         f.pack(fill="both", expand=True)
         f.columnconfigure(1, weight=1)
         fila = 0
+        if video is not None:
+            medio = nombre_medio(video["pagina"], self.app.cfg)
+            enlace = video["permalink"] or ""
+            tk.Label(f, text=f"🎬 Video de {medio}. Míralo y escribe lo que se ve y se dice: el texto de abajo "
+                             "es solo lo que el medio puso junto al video. No pongas nada que no esté en el video.",
+                     bg="#FFF8E1", fg="#5B4200", font=(F, 9, "bold"), anchor="w", justify="left",
+                     wraplength=760, padx=8, pady=6).grid(row=fila, column=0, columnspan=2, sticky="ew")
+            fila += 1
+            if enlace:
+                lk = tk.Label(f, text="▶ Abrir el video en Facebook", fg="#1D4ED8", cursor="hand2",
+                              font=(F, 9, "underline"))
+                lk.grid(row=fila, column=0, columnspan=2, sticky="w", pady=(2, 6))
+                lk.bind("<Button-1>", lambda e: webbrowser.open(enlace))
+                fila += 1
         ttk.Label(f, text="Sección:").grid(row=fila, column=0, sticky="w")
         self.sec = ttk.Combobox(f, state="readonly", values=NOTICIAS, width=20)
         self.sec.set(seccion if seccion in NOTICIAS else NOTICIAS[0])
@@ -149,6 +178,12 @@ class NotaPropia(tk.Toplevel):
         ttk.Button(fb, text="🖼 Elegir foto…", command=self._elegir_foto).pack(side="left")
         self.lbl_foto = ttk.Label(fb, text="Sin foto", foreground="#6B7280")
         self.lbl_foto.pack(side="left", padx=8)
+        if self.foto:
+            self.lbl_foto.configure(text="Miniatura del video (se le quitarán logos y textos)")
+            ttk.Button(fb, text="Sin foto", command=self._sin_foto).pack(side="left")
+        if video is not None:
+            self.texto.insert("1.0", (video["texto"] or "").strip())
+            self.lbl_cont.configure(text=f"{len(self.texto.get('1.0', 'end').strip())} caracteres")
         fila += 1
         self.redactar = tk.BooleanVar(value=True)
         ttk.Checkbutton(f, text="Que Claude la redacte con el estilo del diario y al largo del espacio "
@@ -161,6 +196,10 @@ class NotaPropia(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.destroy())
         self.campos["titular"].focus_set()
         self.grab_set()
+
+    def _sin_foto(self):
+        self.foto = None
+        self.lbl_foto.configure(text="Sin foto")
 
     def _elegir_foto(self):
         ruta = filedialog.askopenfilename(parent=self, title="Foto de la nota",
@@ -177,18 +216,21 @@ class NotaPropia(tk.Toplevel):
             return
         try:
             gid = crear_nota_propia(self.sec.get(), self.campos["ante"].get(), titular,
-                                    self.campos["lugar"].get(), texto, self.foto, self.pag)
+                                    self.campos["lugar"].get(), texto, self.foto, self.pag, self.video)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("Nota propia", f"No se pudo guardar: {e}", parent=self)
             return
-        vista, rol, redactar = self.vista, self.rol or "secundaria", self.redactar.get()
+        vista, app, rol, redactar = self.vista, self.app, self.rol or "secundaria", self.redactar.get()
+        regenerar = getattr(vista, "generar", lambda: None)
+        if self.al_guardar:
+            self.al_guardar(gid)
         self.destroy()
-        vista.app._refresh_dashboard()
+        app._refresh_dashboard()
         if not redactar:
-            vista.app._aviso("Nota propia añadida al periódico.", "ok")
-            vista.generar()
+            app._aviso("Nota propia añadida al periódico.", "ok")
+            regenerar()
             return
-        vista.app._aviso("Nota guardada. Claude la está redactando al largo del espacio…", "info", 6000)
+        app._aviso("Nota guardada. Claude la está redactando al largo del espacio…", "info", 6000)
 
         def run():
             from .redaccion import ajustar
@@ -196,14 +238,15 @@ class NotaPropia(tk.Toplevel):
                 g, n = _nota(gid)
                 n.pop("_EDITADO", None)               # (para que la redacción a medida pueda tocarla)
                 _guardar(gid, n)
-                ajustar(vista.app._cfg_actual(), gid, rol)
+                ajustar(app._cfg_actual(), gid, rol)
                 g, n = _nota(gid)
                 n["_EDITADO"] = datetime.now().isoformat(timespec="seconds")
                 _guardar(gid, n)
-                vista.app.q.put(("aviso_ok", "Nota propia redactada y puesta en el periódico."))
+                app.q.put(("aviso_ok", "Nota propia redactada y puesta en el periódico."))
             except Exception as e:  # noqa: BLE001
-                vista.app.q.put(("error", f"Nota propia: Claude no pudo redactarla ({e}); quedó tal cual."))
+                app.q.put(("error", f"Nota propia: Claude no pudo redactarla ({e}); quedó tal cual."))
             finally:
-                vista.app.en_ui(vista.generar)
+                app.en_ui(regenerar)
+                app.en_ui(app._refresh_dashboard)
 
         threading.Thread(target=run, daemon=True).start()

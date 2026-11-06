@@ -223,10 +223,9 @@ class InicioTab(ttk.Frame):
 
     # ------------------------------------------------------------------
     def _ir_noticias(self):
-        self.app.d_mostrar.set("Pendientes de publicar")
-        self.app.d_periodo.set("Todo")
+        self.app.d_mostrar.set("Todas las del día")
         self.app.nb.select(self.app.tab_dash)
-        self.app._refresh_dashboard()
+        self.app.ir_a_dia(datetime.now().strftime("%Y-%m-%d"))
 
     def _ir_portada(self):
         self.app.nb.select(self.app.portada_tab)

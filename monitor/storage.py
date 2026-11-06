@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS posts (
     texto         TEXT,
     publicado     TEXT,               -- ISO si se pudo leer, si no NULL
     detectado     TEXT NOT NULL,
-    estado        TEXT NOT NULL,      -- base | pendiente | procesado | error
+    estado        TEXT NOT NULL,      -- base | pendiente | procesado | error | video (por revisar)
+                                      -- | video_nota (se hizo su nota) | video_descartado
     titular       TEXT,
     ia_json       TEXT,
     pdf_path      TEXT,
@@ -103,12 +104,21 @@ def init_db():
         gcols = {r["name"] for r in c.execute("PRAGMA table_info(grupos)")}
         if "en_periodico" not in gcols:   # 1 = va al periódico, 0 = la excluyó el editor
             _add_column(c, "grupos", "en_periodico", "INTEGER DEFAULT 1")
+        # Web: en_web 1 = va a la web; web_estado '' (nunca subida) | 'publicada' | 'actualizar' (se editó
+        # después de subirla); web_slug fija la dirección de la nota aunque luego cambie el titular.
+        for col, typ in (("en_web", "INTEGER DEFAULT 0"), ("web_estado", "TEXT DEFAULT ''"),
+                         ("web_publicado", "TEXT"), ("web_slug", "TEXT")):
+            if col not in gcols:
+                _add_column(c, "grupos", col, typ)
         # índices de las columnas usadas en WHERE / ORDER BY (idempotentes)
         c.execute("CREATE INDEX IF NOT EXISTS ix_grupo ON posts(grupo_id)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_estado ON posts(estado)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_g_estado_pdf ON grupos(estado_pdf)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_g_ultimo_pdf ON grupos(ultimo_pdf)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_g_nota_pend ON grupos(nota_pendiente)")
+        # videos y transmisiones que aún esperaban a la IA: pasan a la bandeja de videos por revisar
+        c.execute("UPDATE posts SET estado='video', error=NULL WHERE estado IN ('pendiente','error') "
+                  "AND grupo_id IS NULL AND " + _SQL_VIDEO)
 
 
 def now_iso():
@@ -150,6 +160,40 @@ def insert_post(p: dict, estado: str) -> bool:
         return cur.rowcount == 1
 
 
+# ------------------------------------------------------------------ videos y transmisiones
+# De un video solo se lee el texto que lo acompaña (no se transcribe): no van a la IA sino a la
+# pestaña 🎬 Videos, donde el equipo decide si vale una nota y la escribe a mano.
+_RE_VIDEO = re.compile(r"facebook\.com/(?:[^?#]*/)?(?:videos|reel|watch)\b|fb\.watch/", re.I)
+_SQL_VIDEO = ("(id LIKE 'videos:%' OR id LIKE 'reel:%' OR permalink LIKE '%/videos/%' "
+              "OR permalink LIKE '%/reel/%' OR permalink LIKE '%/watch%')")
+ESTADOS_VIDEO = ("video", "video_nota", "video_descartado")
+
+
+def es_video(p) -> bool:
+    p = dict(p)
+    pid = str(p.get("id") or "")
+    return pid.startswith(("videos:", "reel:")) or bool(_RE_VIDEO.search(p.get("permalink") or ""))
+
+
+def videos(todos: bool = False, limite: int = 300):
+    """Videos por revisar (o también los ya resueltos), del más nuevo al más viejo."""
+    est = ESTADOS_VIDEO if todos else ("video",)
+    with _conn() as c:
+        return c.execute(f"SELECT * FROM posts WHERE estado IN ({','.join('?' * len(est))}) "
+                         "ORDER BY COALESCE(publicado, detectado) DESC LIMIT ?", (*est, limite)).fetchall()
+
+
+def n_videos_por_revisar() -> int:
+    with _conn() as c:
+        return c.execute("SELECT COUNT(*) FROM posts WHERE estado='video'").fetchone()[0]
+
+
+def video_con_nota(post_id: str, gid: int) -> None:
+    """El video queda unido a la nota hecha a mano (su foto y su medio sirven para el crédito)."""
+    with _conn() as c:
+        c.execute("UPDATE posts SET estado='video_nota', grupo_id=? WHERE id=?", (gid, post_id))
+
+
 def update_post(post_id: str, **fields) -> None:
     if "ia_json" in fields and not isinstance(fields["ia_json"], str):
         fields["ia_json"] = json.dumps(fields["ia_json"], ensure_ascii=False)
@@ -186,10 +230,11 @@ def all_posts():
 
 # ------------------------------------------------------------------ grupos (Fase 2)
 def posts_sin_grupo():
-    """Noticias capturadas (no 'base') que todavía no pasaron por el cruce."""
+    """Noticias capturadas (no 'base' ni videos) que todavía no pasaron por el cruce."""
     with _conn() as c:
         return c.execute(
-            "SELECT * FROM posts WHERE grupo_id IS NULL AND estado != 'base' "
+            "SELECT * FROM posts WHERE grupo_id IS NULL AND estado NOT IN ('base','video','video_nota',"
+            "'video_descartado') "
             "AND COALESCE(texto,'') != '' ORDER BY COALESCE(publicado, detectado)"
         ).fetchall()
 
@@ -331,6 +376,98 @@ def set_en_periodico(gids, valor: bool) -> None:
 def guardar_nota(gid, nota: dict) -> None:
     """Guarda la nota editada a mano (texto, foto, portada)."""
     actualizar_grupo(gid, nota_json=nota, titular=nota.get("TITULAR") or None, actualizado=now_iso())
+    marcar_web_editada([gid])
+
+
+# ------------------------------------------------------------------ día de trabajo
+def dia_de(g) -> str:
+    """Día de trabajo de una noticia ('AAAA-MM-DD'): el de la fecha del hecho (o de la última actualización)."""
+    return (g["fecha_hecho"] or g["actualizado"] or "")[:10]
+
+
+def dias_con_noticias(limite: int = 60):
+    """[(día, total, al periódico, a la web)] de los días con noticias, del más reciente al más antiguo."""
+    with _conn() as c:
+        return c.execute(
+            "SELECT substr(COALESCE(fecha_hecho, actualizado), 1, 10) AS dia, COUNT(*) AS n, "
+            "SUM(CASE WHEN COALESCE(en_periodico,1)=1 THEN 1 ELSE 0 END) AS np, "
+            "SUM(CASE WHEN COALESCE(en_web,0)=1 THEN 1 ELSE 0 END) AS nw "
+            "FROM grupos WHERE nota_json IS NOT NULL AND estado_pdf != 'descartado' "
+            "GROUP BY dia ORDER BY dia DESC LIMIT ?", (limite,)).fetchall()
+
+
+def grupos_del_dia(dia: str | None):
+    """Noticias de un día ('AAAA-MM-DD'); None = todas."""
+    q = "SELECT * FROM grupos WHERE nota_json IS NOT NULL AND estado_pdf != 'descartado'"
+    args = ()
+    if dia:
+        q += " AND substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ?"
+        args = (dia,)
+    q += " ORDER BY COALESCE(fecha_hecho, actualizado) DESC"
+    with _conn() as c:
+        return c.execute(q, args).fetchall()
+
+
+def boletin_del_dia(dia: str):
+    """Último boletín generado ese día (por su fecha de generación), o None."""
+    with _conn() as c:
+        return c.execute("SELECT * FROM consolidados WHERE substr(fecha, 1, 10)=? ORDER BY n DESC LIMIT 1",
+                         (dia,)).fetchone()
+
+
+# ------------------------------------------------------------------ web
+def en_web(g) -> bool:
+    return bool("en_web" in g.keys() and g["en_web"])
+
+
+def estado_web(g) -> str:
+    """'no' | 'por_subir' | 'en_linea' | 'actualizar' | 'por_quitar' (estaba en línea y se desmarcó)."""
+    est = (g["web_estado"] if "web_estado" in g.keys() else "") or ""
+    if not en_web(g):
+        return "por_quitar" if est in ("publicada", "actualizar") else "no"
+    if est == "publicada":
+        return "en_linea"
+    if est == "actualizar":
+        return "actualizar"
+    return "por_subir"
+
+
+def set_en_web(gids, valor: bool) -> None:
+    with _conn() as c:
+        c.executemany("UPDATE grupos SET en_web=? WHERE id=?", [(1 if valor else 0, g) for g in gids])
+
+
+def marcar_web_editada(gids) -> None:
+    """Una nota ya subida que se edita queda «por actualizar» en la web."""
+    with _conn() as c:
+        c.executemany("UPDATE grupos SET web_estado='actualizar' WHERE id=? AND web_estado='publicada'",
+                      [(g,) for g in gids])
+
+
+def grupos_web():
+    """Noticias marcadas para la web (de todos los días)."""
+    with _conn() as c:
+        return c.execute("SELECT * FROM grupos WHERE COALESCE(en_web,0)=1 AND nota_json IS NOT NULL "
+                         "AND estado_pdf != 'descartado' ORDER BY COALESCE(fecha_hecho, actualizado) DESC").fetchall()
+
+
+def cambios_web() -> int:
+    """Cuántas noticias tienen cambios sin subir (nuevas, editadas o desmarcadas)."""
+    with _conn() as c:
+        return c.execute(
+            "SELECT COUNT(*) FROM grupos WHERE nota_json IS NOT NULL AND ("
+            "(COALESCE(en_web,0)=1 AND COALESCE(web_estado,'') != 'publicada') OR "
+            "(COALESCE(en_web,0)=0 AND web_estado IN ('publicada','actualizar')))").fetchone()[0]
+
+
+def registrar_subida_web(subidas, slugs: dict) -> None:
+    """Tras subir: las marcadas quedan 'publicada'; las desmarcadas vuelven a ''."""
+    ahora = now_iso()
+    with _conn() as c:
+        for gid in subidas:
+            c.execute("UPDATE grupos SET web_estado='publicada', web_publicado=COALESCE(web_publicado, ?), "
+                      "web_slug=? WHERE id=?", (ahora, slugs.get(gid), gid))
+        c.execute("UPDATE grupos SET web_estado='' WHERE COALESCE(en_web,0)=0 AND web_estado IN ('publicada','actualizar')")
 
 
 def list_consolidados():

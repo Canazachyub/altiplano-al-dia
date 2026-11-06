@@ -11,12 +11,13 @@ from tkinter import messagebox, ttk
 
 from . import storage
 from .analisis import ciclo_fase2, fase2_lock
-from .config import (BASE_DIR, EXCEL_PATH, PROFILE_DIR, get_api_key, load_config, nombre_medio,
-                     normalize_page_url, page_slug, save_config, set_api_key)
+from .config import (BASE_DIR, EXCEL_PATH, PROFILE_DIR, get_api_key, get_github_token, load_config,
+                     nombre_medio, normalize_page_url, page_slug, save_config, set_api_key, set_github_token)
 from .editor import EditorNota
 from .gui_inicio import Desplazable, InicioTab, Tip
 from .gui_registro import ColaHandler, PanelRegistro
 from .gui_portada import PortadaTab
+from .gui_videos import VideosTab
 from .proceso import cerrar_navegador_monitor
 from .vista_previa import VistaPrevia
 from .scraper import interactive_login
@@ -43,6 +44,11 @@ ERR = "#B3261E"
 AMBITO_COLOR = {"TODOS": "#334155", "DISTRITAL": "#2E7D32", "LOCAL": "#00838F", "REGIONAL": "#1565C0",
                 "NACIONAL": "#6A1B9A", "INTERNACIONAL": "#AD1457"}
 F = "Segoe UI"
+_DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
+          "noviembre", "diciembre"]
+_WEB_TXT = {"no": "☐ No va", "por_subir": "☑ Por subir", "en_linea": "🌐 En línea", "actualizar": "↻ Actualizar",
+            "por_quitar": "✖ Se quitará"}
 
 
 def _sin_marcas(cuerpo) -> str:
@@ -131,6 +137,9 @@ class App(tk.Tk):
         self.nb = ttk.Notebook(self.paned)
         self.paned.add(self.nb, weight=5)
         self._build_bandeja()
+        self.videos_tab = VideosTab(self.nb, self)
+        self.nb.add(self.videos_tab, text="  🎬 Videos  ")
+        self.videos_tab.actualizar_titulo()
         self._build_dashboard()
         self.portada_tab = PortadaTab(self.nb, self)
         self.nb.add(self.portada_tab, text="  📰 Portada  ")
@@ -200,6 +209,10 @@ class App(tk.Tk):
             r = storage.get_post(d)
             self.registro.agregar("OK", f"＋ Noticia nueva: {nombre_medio(r['pagina'], self.cfg) if r else ''} · "
                                         f"{((r['texto'] or '') if r else '')[:90].replace(chr(10), ' ')}")
+        elif ev == "video":
+            r = storage.get_post(d)
+            self.registro.agregar("AVISO", f"🎬 Video para revisar: {nombre_medio(r['pagina'], self.cfg) if r else ''} · "
+                                           f"{((r['texto'] or '') if r else '')[:90].replace(chr(10), ' ')}")
         elif ev == "consolidado":
             self.registro.agregar("OK", f"📰 Periódico generado: {d}")
         elif ev == "detenido":
@@ -410,6 +423,9 @@ class App(tk.Tk):
         self.nb.add(tab, text="  🗂 Noticias  ")
         self.tab_dash = tab
 
+        # día de trabajo: la tabla muestra solo las noticias de un día
+        self._barra_dia(tab)
+
         # tarjetas por ámbito
         self.cards_frame = ttk.Frame(tab)
         self.cards_frame.pack(fill="x")
@@ -434,25 +450,20 @@ class App(tk.Tk):
         # filtros y acciones
         fb = ttk.Frame(tab)
         fb.pack(fill="x", pady=(10, 4))
-        ttk.Label(fb, text="Periodo:").pack(side="left")
-        self.d_periodo = ttk.Combobox(fb, state="readonly", width=14,
-                                      values=["Hoy", "Últimas 48 h", "Últimos 7 días", "Todo"])
-        self.d_periodo.set("Todo")      # las pendientes viejas también deben verse
-        self.d_periodo.pack(side="left", padx=(4, 12))
         ttk.Label(fb, text="Tema:").pack(side="left")
         self.d_tema = ttk.Combobox(fb, state="readonly", width=20, values=["Todos"] + self.cfg["temas"])
         self.d_tema.set("Todos")
         self.d_tema.pack(side="left", padx=(4, 12))
         ttk.Label(fb, text="Mostrar:").pack(side="left")
-        self.d_mostrar = ttk.Combobox(fb, state="readonly", width=22,
-                                      values=["Pendientes de publicar", "Todas"])
-        self.d_mostrar.set("Pendientes de publicar")
+        self.d_mostrar = ttk.Combobox(fb, state="readonly", width=24,
+                                      values=["Todas las del día", "Pendientes del periódico", "Pendientes de la web"])
+        self.d_mostrar.set("Todas las del día")
         self.d_mostrar.pack(side="left", padx=(4, 12))
         self.d_mostrar.bind("<<ComboboxSelected>>", lambda e: self._refresh_dashboard())
         self.d_multi = tk.BooleanVar(value=False)
         ttk.Checkbutton(fb, text="Solo combinadas (2+ medios)", variable=self.d_multi,
                         command=self._refresh_dashboard).pack(side="left")
-        for cb in (self.d_periodo, self.d_tema):
+        for cb in (self.d_tema,):
             cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_dashboard())
         # (la ayuda va en la fila de filtros; los botones de acción, en la fila de abajo: así entran
         # completos también en pantallas de 1280 px)
@@ -483,6 +494,23 @@ class App(tk.Tk):
                    command=self._publicar).pack(side="right", padx=(4, 0))
         ttk.Button(eb, text="👁 Vista previa", command=self._vista_previa).pack(side="right")
 
+        wb = ttk.Frame(tab)
+        wb.pack(fill="x", pady=(0, 4))
+        ttk.Label(wb, text="Web:", style="Muted.TLabel").pack(side="left")
+        b_w = ttk.Button(wb, text="① Marcar para la web", command=self._toggle_web)
+        b_w.pack(side="left", padx=(6, 4))
+        Tip(b_w, "Paso 1: marca (o desmarca) la noticia elegida para la web. Es lo mismo que hacer clic en "
+                 "«☐ No va» de la columna 🌐 Web.")
+        ttk.Button(wb, text="Todas a la web", command=lambda: self._web_todas(True)).pack(side="left")
+        ttk.Button(wb, text="Ninguna a la web", command=lambda: self._web_todas(False)).pack(side="left", padx=4)
+        self.b_subir = ttk.Button(wb, text="② 🌐 Subir a la web", style="Accent.TButton", command=self._subir_web)
+        self.b_subir.pack(side="left", padx=(8, 0))
+        self.lbl_web = ttk.Label(wb, text="", style="Muted.TLabel", cursor="hand2")
+        self.lbl_web.pack(side="left", padx=10)
+        self.lbl_web.bind("<Button-1>", lambda ev: self._click_lbl_web())
+        Tip(self.b_subir, "Publica en la web las noticias marcadas 🌐 (de cualquier día) con el mismo texto y foto "
+                          "que llevan en el periódico, y quita las que desmarcaste. Tarda 1 o 2 minutos en verse.")
+
         # chips por tema + buscador
         fila_chips = ttk.Frame(tab)
         fila_chips.pack(fill="x", pady=(2, 8))
@@ -501,10 +529,11 @@ class App(tk.Tk):
         pw.pack(fill="both", expand=True)
         left = ttk.Frame(pw)
         pw.add(left, weight=3)
-        cols = ("va", "marca", "hora", "titular", "medios", "n", "tema", "pdf")
+        cols = ("va", "web", "marca", "hora", "titular", "medios", "n", "tema", "pdf")
         self.gtree = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse")
-        for c, t, w, anc in (("va", "¿Va?", 74, "center"), ("marca", "", 28, "center"), ("hora", "Hora", 78, "w"),
-                             ("titular", "Titular", 300, "w"), ("medios", "Medios", 150, "w"),
+        for c, t, w, anc in (("va", "📰 Periódico", 92, "center"), ("web", "🌐 Web", 100, "center"),
+                             ("marca", "", 28, "center"), ("hora", "Hora", 78, "w"),
+                             ("titular", "Titular", 300, "w"), ("medios", "Medios", 130, "w"),
                              ("n", "Fuentes", 56, "center"), ("tema", "Tema", 115, "w"),
                              ("pdf", "Boletín", 72, "w")):
             self.gtree.heading(c, text=t)
@@ -517,6 +546,7 @@ class App(tk.Tk):
         sb.pack(side="left", fill="y")
         self.gtree.bind("<<TreeviewSelect>>", self._on_select_grupo)
         self.gtree.bind("<Button-1>", self._click_va, add="+")
+        self.gtree.bind("<Button-1>", self._click_web, add="+")
         self.gtree.bind("<Double-1>", lambda e: self._editar())
         self.gtree.tag_configure("fuera", foreground="#9CA3AF")
         self.gtree.tag_configure("publicada", foreground="#6B7280")
@@ -622,6 +652,48 @@ class App(tk.Tk):
         ttk.Button(bt, text="↓", width=3, command=lambda: self._move_tema(1)).pack(side="left", padx=4)
         ttk.Label(tf, text="El orden se usa en el boletín. El último es el comodín (\"Otros\").",
                   style="Muted.TLabel", wraplength=260).pack(anchor="w", pady=(6, 0))
+
+        self._build_config_web(tab, 2)
+
+    def _build_config_web(self, tab, fila):
+        wf = ttk.LabelFrame(tab, text="Web (sitio de Altiplano al Día)", padding=10)
+        wf.grid(row=fila, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        campos = (("Carpeta del sitio en esta PC (opcional)", "web_carpeta",
+                   "La carpeta «public» del sitio, para verlo en esta PC antes de subirlo."),
+                  ("Repositorio de GitHub (usuario/repositorio)", "web_repo", "Ejemplo: altiplano/altiplano-web"),
+                  ("Rama", "web_rama", "Casi siempre «main»."),
+                  ("Carpeta dentro del repositorio", "web_ruta", "Donde van data/, img/ y boletines/ (normalmente «public»)."),
+                  ("Dirección pública de la web", "web_url", "Ejemplo: https://altiplanoaldia.pe (para RSS y Google)."))
+        self.web_campos = {}
+        for r, (txt, clave, ayuda) in enumerate(campos):
+            ttk.Label(wf, text=txt + ":").grid(row=r, column=0, sticky="w", pady=3)
+            e = ttk.Entry(wf, width=60)
+            e.insert(0, self.cfg.get(clave) or "")
+            e.grid(row=r, column=1, columnspan=3, sticky="w", pady=3, padx=(6, 0))
+            ttk.Label(wf, text=ayuda, style="Muted.TLabel").grid(row=r, column=4, sticky="w", padx=8)
+            self.web_campos[clave] = e
+        ttk.Button(wf, text="Elegir…", command=self._elegir_carpeta_web).grid(row=0, column=5, sticky="w")
+        self.k_gh = self._key_row(wf, len(campos), "Token de GitHub", get_github_token())
+        ttk.Button(wf, text="Guardar", style="Accent.TButton", command=self._save_web).grid(
+            row=len(campos) + 1, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(wf, text="El token se guarda en .env (no se sube a GitHub). Debe tener permiso «Contents: "
+                           "Read and write» solo sobre el repositorio de la web.", style="Muted.TLabel",
+                  wraplength=700).grid(row=len(campos) + 1, column=1, columnspan=5, sticky="w", pady=(8, 0))
+
+    def _elegir_carpeta_web(self):
+        from tkinter import filedialog
+        d = filedialog.askdirectory(title="Carpeta «public» del sitio")
+        if d:
+            self.web_campos["web_carpeta"].delete(0, "end")
+            self.web_campos["web_carpeta"].insert(0, d)
+
+    def _save_web(self):
+        for clave, e in self.web_campos.items():
+            self.cfg[clave] = e.get().strip()
+        save_config(self.cfg)
+        set_github_token(self.k_gh.get())
+        self._aviso("Configuración de la web guardada.", "ok")
+        self._refresh_dashboard()
 
     def _key_row(self, parent, row, label, value):
         ttk.Label(parent, text=label + ":").grid(row=row, column=0, sticky="w", pady=3)
@@ -996,8 +1068,10 @@ class App(tk.Tk):
             self._reprocesando.discard(d)
             self._load_posts()
             return
-        if ev in ("status", "error", "nuevo", "consolidado", "detenido", "fin"):
+        if ev in ("status", "error", "nuevo", "video", "consolidado", "detenido", "fin"):
             self._al_registro(ev, d)
+        if ev in ("video", "fin", "actualizado") and hasattr(self, "videos_tab"):
+            self.videos_tab.recargar()
         if ev == "status":
             self.status.set(d)
             if self.running:
@@ -1025,6 +1099,11 @@ class App(tk.Tk):
             self._aviso("Revisión detenida. Lo leído hasta ese momento quedó guardado.", "warn")
         elif ev == "aviso_ok":
             self._aviso(d, "ok", 7000)
+        elif ev == "web_fin":
+            self._set_busy(False)
+            self._refresh_dashboard()
+        elif ev == "ofrecer_web":
+            self._ofrecer_web(d)
         elif ev == "fase2_manual_fin":
             self._set_busy(False)
             if not self.last_error:
@@ -1166,16 +1245,88 @@ class App(tk.Tk):
         threading.Thread(target=run, daemon=True).start()
 
     # ================================================================== dashboard: datos
-    def _desde(self):
-        p = self.d_periodo.get()
-        now = datetime.now()
-        if p == "Hoy":
-            return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        if p == "Últimas 48 h":
-            return (now - timedelta(hours=48)).isoformat()
-        if p == "Últimos 7 días":
-            return (now - timedelta(days=7)).isoformat()
-        return None
+    # ---------------------------------------------------------------- día de trabajo
+    def _barra_dia(self, tab):
+        self.dia_sel = datetime.now().strftime("%Y-%m-%d")    # None = todos los días
+        self._dias_map = {}
+        bar = tk.Frame(tab, bg=NAVY)
+        bar.pack(fill="x", pady=(0, 10))
+        izq = tk.Frame(bar, bg=NAVY)
+        izq.pack(side="left", padx=10, pady=8)
+        estilo = dict(bg=NAVY, fg="white", activebackground="#24476E", activeforeground="white", relief="flat",
+                      font=(F, 13, "bold"), cursor="hand2", bd=0, padx=8)
+        tk.Button(izq, text="◀", command=lambda: self._mover_dia(-1), **estilo).pack(side="left")
+        self.lbl_dia = tk.Label(izq, text="", bg=NAVY, fg="white", font=(F, 15, "bold"), width=32)
+        self.lbl_dia.pack(side="left", padx=4)
+        tk.Button(izq, text="▶", command=lambda: self._mover_dia(1), **estilo).pack(side="left")
+        tk.Button(izq, text="Hoy", command=lambda: self.ir_a_dia(datetime.now().strftime("%Y-%m-%d")),
+                  **{**estilo, "font": (F, 10, "bold"), "bg": "#FFEE00", "fg": NAVY, "activebackground": "#F5E200",
+                     "activeforeground": NAVY}).pack(side="left", padx=(10, 6), ipady=1)
+        self.d_dia = ttk.Combobox(izq, state="readonly", width=38)
+        self.d_dia.pack(side="left", padx=(6, 0))
+        self.d_dia.bind("<<ComboboxSelected>>", lambda e: self.ir_a_dia(self._dias_map.get(self.d_dia.get())))
+        Tip(self.d_dia, "Ir a otro día. Cada día muestra cuántas noticias tiene, cuántas van al periódico (📰) "
+                        "y cuántas a la web (🌐).")
+        der = tk.Frame(bar, bg=NAVY)
+        der.pack(side="right", padx=12)
+        self.lbl_dia_pdf = tk.Label(der, text="", bg=NAVY, fg="white", font=(F, 10, "bold"), anchor="e")
+        self.lbl_dia_pdf.pack(anchor="e")
+        self.lbl_dia_web = tk.Label(der, text="", bg=NAVY, fg="#C9D6EA", font=(F, 10), anchor="e")
+        self.lbl_dia_web.pack(anchor="e")
+
+    def ir_a_dia(self, dia):
+        """dia 'AAAA-MM-DD' o None (todos los días)."""
+        self.dia_sel = dia
+        self._refresh_dashboard()
+
+    def _mover_dia(self, paso):
+        base = datetime.strptime(self.dia_sel, "%Y-%m-%d") if self.dia_sel else datetime.now()
+        self.ir_a_dia((base + timedelta(days=paso)).strftime("%Y-%m-%d"))
+
+    def _pintar_barra_dia(self, grupos_dia):
+        hoy = datetime.now().strftime("%Y-%m-%d")
+        if self.dia_sel:
+            d = datetime.strptime(self.dia_sel, "%Y-%m-%d")
+            txt = f"{_DIAS[d.weekday()]} {d.day} de {_MESES[d.month - 1]} de {d.year}"
+            rel = {0: "  ·  HOY", -1: "  ·  ayer"}.get((d.date() - datetime.now().date()).days, "")
+            self.lbl_dia.configure(text=txt + rel)
+        else:
+            self.lbl_dia.configure(text="Todos los días")
+        dias = storage.dias_con_noticias()
+        self._dias_map = {}
+        valores = []
+        if not any(r["dia"] == hoy for r in dias):
+            self._dias_map["Hoy · sin noticias todavía"] = hoy
+            valores.append("Hoy · sin noticias todavía")
+        for r in dias:
+            d = datetime.strptime(r["dia"], "%Y-%m-%d")
+            et = (f"{'Hoy' if r['dia'] == hoy else _DIAS[d.weekday()][:3]} {d:%d/%m}  ·  {r['n']} noticias"
+                  f"  (📰 {r['np'] or 0}  🌐 {r['nw'] or 0})")
+            self._dias_map[et] = r["dia"]
+            valores.append(et)
+        self._dias_map["Todos los días"] = None
+        valores.append("Todos los días")
+        self.d_dia.configure(values=valores)
+        actual = next((k for k, v in self._dias_map.items() if v == self.dia_sel), "")
+        self.d_dia.set(actual or "Ir a otro día…")
+        if self.dia_sel:
+            b = storage.boletin_del_dia(self.dia_sel)
+            if b:
+                self.lbl_dia_pdf.configure(text=f"📰 Boletín N° {b['n']} publicado a las {(b['fecha'] or '')[11:16]}"
+                                                f"  ({b['n_noticias']} noticias)", fg="#9BE7A6")
+            elif self.dia_sel == hoy:
+                n = len(storage.grupos_para_pdf())
+                self.lbl_dia_pdf.configure(text=f"📰 Boletín de hoy: sin publicar  ·  {n} noticia(s) marcadas",
+                                           fg="#FFEE00")
+            else:
+                self.lbl_dia_pdf.configure(text="📰 Ese día no se publicó boletín", fg="#C9D6EA")
+        else:
+            self.lbl_dia_pdf.configure(text="", fg="white")
+        est = [storage.estado_web(g) for g in grupos_dia]
+        en_linea = est.count("en_linea")
+        pend = len(est) - en_linea - est.count("no")
+        self.lbl_dia_web.configure(text=f"🌐 Web: {en_linea} en línea" + (f"  ·  {pend} por subir" if pend else "")
+                                   + ("" if self.dia_sel else "  (todos los días)"))
 
     def _select_ambito(self, amb):
         self.amb_sel = amb
@@ -1184,7 +1335,8 @@ class App(tk.Tk):
     def _refresh_dashboard(self):
         if not hasattr(self, "gtree"):
             return
-        grupos = storage.list_grupos(self._desde())
+        grupos = storage.grupos_del_dia(self.dia_sel)
+        self._pintar_barra_dia(grupos)
         tema = self.d_tema.get()
         solo_multi = self.d_multi.get()
         base = [g for g in grupos if (not solo_multi or storage.n_medios(g) > 1)]
@@ -1245,31 +1397,36 @@ class App(tk.Tk):
             pdf = {"publicado": f"N° {g['ultimo_pdf']}", "actualizacion": "Actualizar",
                    "nuevo": "Pendiente"}.get(g["estado_pdf"], g["estado_pdf"])
             pendiente = g["estado_pdf"] in ("nuevo", "actualizacion")
-            if self.d_mostrar.get() != "Todas" and not pendiente:
+            ew = storage.estado_web(g)
+            mostrar = self.d_mostrar.get()
+            if mostrar == "Pendientes del periódico" and not pendiente:
+                continue
+            if mostrar == "Pendientes de la web" and ew in ("no", "en_linea"):
                 continue
             va_si = (g["en_periodico"] if g["en_periodico"] is not None else 1) == 1
             if pendiente and not va_si:
                 tags.append("fuera")
             if not pendiente:
                 tags.append("publicada")
-            va = ("☑ Va" if va_si else "☐ No va") if pendiente else "Publicada"
+            va = ("☑ Va" if va_si else "☐ No va") if pendiente else f"✔ N° {g['ultimo_pdf']}"
             self.gtree.insert("", "end", iid=str(g["id"]), tags=tags, values=(
-                va, "⚠" if menciona else ("◆" if multi else ""), _fecha_corta(g["fecha_hecho"]),
+                va, _WEB_TXT[ew], "⚠" if menciona else ("◆" if multi else ""), _fecha_corta(g["fecha_hecho"]),
                 ("⚠ Nombra al medio · " if menciona else "") + (g["titular"] or ""), g["medios"],
                 g["n_fuentes"], g["tema"], pdf))
         if sel and self.gtree.exists(sel[0]):
             self.gtree.selection_set(sel[0])
         listos = storage.grupos_para_pdf()
-        self.lbl_va.configure(text=f"{len(listos)} noticia(s) irán en el próximo periódico")
+        self.lbl_va.configure(text=f"{len(listos)} noticia(s) de hoy irán en el próximo periódico")
+        self._pintar_estado_web()
         self._refrescar_inicio()
         if not self.gtree.get_children() and q:
             self.gtree.insert("", "end", iid="vacio", values=(
-                "", "", "", f"Ninguna noticia coincide con «{q}». Borra la búsqueda (✕) o prueba Periodo → Todo.",
+                "", "", "", "", f"Ninguna noticia coincide con «{q}». Borra la búsqueda (✕) o elige «Todos los días».",
                 "", "", "", ""))
-        elif not self.gtree.get_children() and self.d_mostrar.get() != "Todas":
+        elif not self.gtree.get_children():
             self.gtree.insert("", "end", iid="vacio", values=(
-                "", "", "", "Sin noticias pendientes. Para ver las publicadas: Mostrar → Todas.",
-                "", "", "", ""))
+                "", "", "", "", "No hay noticias en este día con ese filtro. Usa ◀ ▶ para cambiar de día "
+                "o Mostrar → Todas las del día.", "", "", "", ""))
 
     def _buscar_luego(self, fn, ms=250):
         """Espera a que se deje de escribir para filtrar (no recarga la tabla en cada tecla)."""
@@ -1359,6 +1516,136 @@ class App(tk.Tk):
         if fila and fila.isdigit():
             self.after(10, lambda: self._cambiar_va(int(fila)))
 
+    def _click_web(self, e):
+        if self.gtree.identify_region(e.x, e.y) != "cell" or self.gtree.identify_column(e.x) != "#2":
+            return
+        fila = self.gtree.identify_row(e.y)
+        if fila and fila.isdigit():
+            self.after(10, lambda: self._cambiar_web(int(fila)))
+
+    # ---------------------------------------------------------------- web
+    def _toggle_web(self):
+        gid = self._gid_sel()
+        if gid is None:
+            self._aviso("Selecciona una noticia en la tabla.", "warn")
+            return
+        self._cambiar_web(gid)
+
+    def _cambiar_web(self, gid):
+        g = storage.get_grupo(gid)
+        if g is None:
+            self._refresh_dashboard()
+            return
+        va = storage.en_web(g)
+        if va and storage.estado_web(g) in ("en_linea", "actualizar") and not messagebox.askyesno(
+                "Quitar de la web", f"«{(g['titular'] or '')[:70]}» ya está en la web.\n\n"
+                                    "¿Quitarla? Se borrará de la web la próxima vez que pulses 🌐 Subir a la web."):
+            return
+        storage.set_en_web([gid], not va)
+        self._aviso(("Ya no va a la web: " if va else "Va a la web: ") + (g["titular"] or "")[:60]
+                    + ("" if va else "  (pulsa 🌐 Subir a la web para publicarla)"), "warn" if va else "ok")
+        self._refresh_dashboard()
+
+    def _web_todas(self, valor):
+        ids = [int(i) for i in self.gtree.get_children() if i.isdigit()]
+        if not ids:
+            self._aviso("No hay noticias en la tabla.", "warn")
+            return
+        if not valor and not messagebox.askyesno(
+                "Web", f"¿Quitar de la web las {len(ids)} noticia(s) que se ven en la tabla?\n"
+                       "Las que ya estaban en línea se borrarán al subir la web."):
+            return
+        storage.set_en_web(ids, valor)
+        self._aviso(f"{len(ids)} noticia(s) {'marcadas para la web' if valor else 'quitadas de la web'}.",
+                    "ok" if valor else "warn")
+        self._refresh_dashboard()
+
+    def _pintar_estado_web(self):
+        """Texto guía junto a «Subir a la web»: dice en qué paso está y qué falta hacer."""
+        from . import web
+        cambios = storage.cambios_web()
+        estados = [storage.estado_web(g) for g in storage.grupos_web()]
+        en_linea = sum(1 for e in estados if e in ("en_linea", "actualizar"))
+        self._web_sin_config = not web.configurada(self._cfg_actual())
+        self.b_subir.configure(text=f"② 🌐 Subir a la web ({cambios})" if cambios else "② 🌐 Subir a la web")
+        if self._web_sin_config:
+            txt, color = "⚠ Primero elige dónde se publica la web: clic aquí (⚙ Configuración → Web)", "#b45309"
+        elif not estados:
+            txt, color = ("Ninguna noticia marcada para la web. Haz clic en «☐ No va» de la columna 🌐 Web "
+                          "(o ①) y luego pulsa ②."), MUTED
+        elif cambios:
+            txt, color = f"{cambios} cambio(s) esperando → pulsa ② para publicarlos · {en_linea} ya en línea", "#1d4ed8"
+        else:
+            txt, color = f"✔ La web está al día · {en_linea} noticia(s) en línea", "#15803d"
+        self.lbl_web.configure(text=txt, foreground=color)
+
+    def _click_lbl_web(self):
+        if getattr(self, "_web_sin_config", False):
+            self.nb.select(self.tab_config)
+
+    def _subir_web(self):
+        from . import web
+        cfg = self._cfg_actual()
+        if not web.configurada(cfg):
+            if messagebox.askyesno("Web", "Todavía no está configurada la web (carpeta del sitio o GitHub).\n\n"
+                                          "¿Ir a ⚙ Configuración → Web?"):
+                self.nb.select(self.tab_config)
+            return
+        if not storage.cambios_web() and not messagebox.askyesno(
+                "Web", "No hay cambios sin subir. ¿Volver a subir la web de todas formas?"):
+            return
+        from .fotos_limpias import en_segundo_plano, fotos_web_sin_revisar
+        sucias = fotos_web_sin_revisar() if cfg.get("limpiar_fotos", True) else 0
+        if sucias:
+            r = messagebox.askyesnocancel(
+                "Fotos sin limpiar",
+                f"{sucias} foto(s) de las noticias para la web todavía no pasaron por la limpieza "
+                "(quitar logos, titulares y marcos de otros medios; ~1 minuto por foto con rótulos).\n\n"
+                "Sí = limpiarlas y después subir\nNo = subir así, con las fotos como vienen\nCancelar = no subir")
+            if r is None:
+                return
+            if r:
+                self._set_busy(True, "Limpiando las fotos antes de subir a la web…")
+                ok = en_segundo_plano(dict(cfg, limpiar_fotos=True), self._emit,
+                                      al_terminar=lambda: self.q.put(("ui", lambda: self._subir_web_ya(cfg))))
+                if not ok:
+                    self._set_busy(False)
+                    self._aviso("Ya se están limpiando fotos. Espera a que termine y vuelve a pulsar Subir.", "warn")
+                return
+        self._subir_web_ya(cfg)
+
+    def _subir_web_ya(self, cfg):
+        from . import web
+        self._set_busy(True, "Subiendo a la web…")
+
+        def run():
+            try:
+                msg = web.publicar(cfg, avisar=lambda t: self.q.put(("status", t)))
+                self.q.put(("aviso_ok", "🌐 " + msg))
+                self.q.put(("status", msg))
+            except web.ErrorWeb as e:
+                self.q.put(("error", f"Web: {e}"))
+                self.q.put(("ui", lambda m=str(e): messagebox.showerror("No se pudo subir la web", m)))
+            except Exception as e:  # noqa: BLE001
+                self.q.put(("error", f"Web: {e}"))
+            finally:
+                self.q.put(("web_fin", None))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _ofrecer_web(self, gids):
+        """Tras publicar el boletín: ofrece publicar esas mismas noticias en la web."""
+        faltan = [gid for gid in gids if (g := storage.get_grupo(gid)) and storage.estado_web(g) != "en_linea"]
+        if not faltan:
+            return
+        if not messagebox.askyesno("Publicar también en la web",
+                                   f"El boletín ya está listo.\n\n¿Publicar también en la web sus {len(faltan)} "
+                                   "noticia(s), con el mismo texto y foto?"):
+            return
+        storage.set_en_web(faltan, True)
+        self._refresh_dashboard()
+        self._subir_web()
+
     def _toggle_incluir(self):
         gid = self._gid_sel()
         if gid is None:
@@ -1442,6 +1729,7 @@ class App(tk.Tk):
                 "Esas noticias quedarán marcadas como publicadas. ¿Continuar?"):
             return
         cfg = self._cfg_actual()
+        gids_boletin = [g["id"] for g in storage.grupos_para_pdf()]
         self._set_busy(True, "Armando la vista previa…" if previa else "Generando el periódico…")
         self.last_error = ""
 
@@ -1456,6 +1744,8 @@ class App(tk.Tk):
                 if out:
                     os.startfile(str(out))  # noqa: S606
                     self.q.put(("status", ("Vista previa lista: " if previa else "Periódico generado: ") + str(out)))
+                    if not previa:
+                        self.q.put(("ofrecer_web", gids_boletin))
             except PermissionError:
                 self.q.put(("error", "Cierra la vista previa anterior en el visor de PDF y vuelve a intentar."))
             except Exception as e:  # noqa: BLE001

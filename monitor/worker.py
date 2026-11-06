@@ -133,9 +133,11 @@ def revisar(cfg: dict, emit) -> None:
                             if ya_procesados >= cfg["procesar_en_primera_revision"]:
                                 estado = "base"
                             ya_procesados += 1
+                        if estado == "pendiente" and storage.es_video(p):
+                            estado = "video"        # no se transcribe: lo decide el equipo (🎬 Videos)
                         if not storage.insert_post(p, estado):
                             continue        # ya estaba (mismo id): no es nuevo
-                        if estado == "pendiente":
+                        if estado in ("pendiente", "video"):
                             try:
                                 ruta = descargar_imagen(p.get("imagen_url") or og_image(p.get("enlace_ext")),
                                                         p["id"])
@@ -144,7 +146,7 @@ def revisar(cfg: dict, emit) -> None:
                             except Exception:  # noqa: BLE001
                                 log.exception("Foto de %s", p["id"])   # sin foto, pero el post sigue
                             nuevos += 1
-                            emit("nuevo", p["id"])
+                            emit("video" if estado == "video" else "nuevo", p["id"])
                     if i < len(paginas) - 1:
                         detener.wait(random.uniform(8, 20))   # pausa entre páginas, cortable
             finally:

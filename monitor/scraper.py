@@ -93,6 +93,12 @@ EXTRACT_JS = r"""
     const a = r.width * r.height;
     if (/fbcdn|scontent/.test(im.src) && r.width >= 180 && r.height >= 120 && a > area) { img = im.src; area = a; }
   }
+  // videos y transmisiones: su miniatura es el «poster» del <video> (no hay <img> grande)
+  if (!img) {
+    for (const v of p.querySelectorAll('video')) {
+      if (/^https?:/.test(v.poster || '')) { img = v.poster; break; }
+    }
+  }
   return {
     img,
     texto: msg ? msg.innerText : '',
