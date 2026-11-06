@@ -47,6 +47,62 @@ class Tip:
             self.top = None
 
 
+class Desplazable(ttk.Frame):
+    """Contenedor para una pestaña: si su contenido no entra en la pantalla aparece una barra de
+    desplazamiento (y la rueda del mouse lo mueve); si entra, se ve igual que un marco normal.
+    El contenido se pone en .interior."""
+
+    _SIN_RUEDA = ("Listbox", "Treeview", "Text", "TCombobox", "TSpinbox", "Canvas")
+
+    def __init__(self, master, bg=BG, **kw):
+        super().__init__(master)
+        self.canvas = tk.Canvas(self, highlightthickness=0, bd=0, bg=bg)
+        self.barra = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.barra.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.interior = ttk.Frame(self.canvas, **kw)
+        self._id = self.canvas.create_window(0, 0, window=self.interior, anchor="nw")
+        self._con_barra = False
+        self._job = None
+        self.canvas.bind("<Configure>", self._programar)
+        self.interior.bind("<Configure>", self._programar)
+        self.bind_all("<MouseWheel>", self._rueda, add="+")
+
+    def _programar(self, _e=None):
+        if self._job is None:
+            self._job = self.after_idle(self._ajustar)
+
+    def _ajustar(self):
+        self._job = None
+        if not self.winfo_exists():
+            return
+        cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
+        if cw < 10 or ch < 10:
+            return
+        rh = self.interior.winfo_reqheight()
+        alto = max(ch, rh)
+        self.canvas.itemconfigure(self._id, width=cw, height=alto)
+        self.canvas.configure(scrollregion=(0, 0, cw, alto))
+        hace_falta = rh > ch + 2
+        if hace_falta != self._con_barra:
+            self._con_barra = hace_falta
+            if hace_falta:
+                self.barra.pack(side="right", fill="y", before=self.canvas)
+            else:
+                self.barra.pack_forget()
+                self.canvas.yview_moveto(0)
+
+    def _rueda(self, e):
+        if not self._con_barra:
+            return
+        w = e.widget
+        if not isinstance(w, tk.Misc) or not str(w).startswith(str(self)):
+            return                                   # la rueda es de otra parte de la ventana
+        if w.winfo_class() in self._SIN_RUEDA and w is not self.canvas:
+            return                                   # listas y cuadros de texto conservan su rueda
+        self.canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
+
 def enganchar_rueda(widget, canvas):
     """La rueda del mouse sobre widget (y todo lo que tiene dentro) desplaza canvas.
     En listas desplegables y casillas numéricas la rueda NO cambia el valor (se cambiaba sin querer

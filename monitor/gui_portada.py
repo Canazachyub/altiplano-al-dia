@@ -55,7 +55,9 @@ class Tarjeta(ttk.LabelFrame):
         self.combo.grid(row=0, column=0, columnspan=2, sticky="ew")
         self.combo.bind("<<ComboboxSelected>>", lambda e: self._cambio_noticia())
 
-        self.img = tk.Label(self, bg="#E7EEF9", width=THUMB[0], height=THUMB[1], text="Sin foto", fg=MUTED)
+        # imagen vacía del tamaño de la miniatura: así el recuadro mide en píxeles (con solo texto, tk mide en letras)
+        self._vacio = tk.PhotoImage(width=THUMB[0], height=THUMB[1])
+        self.img = tk.Label(self, bg="#E7EEF9", image=self._vacio, text="Sin foto", compound="center", fg=MUTED)
         self.img.grid(row=1, column=0, rowspan=4, sticky="nw", pady=(8, 0))
         bf = ttk.Frame(self)
         bf.grid(row=1, column=1, sticky="nw", padx=(10, 0), pady=(8, 0))
@@ -77,6 +79,7 @@ class Tarjeta(ttk.LabelFrame):
                                                                        sticky="w", pady=(4, 0))
             self.puntos = tk.Text(self, height=3, wrap="word", font=(F, 9), relief="solid", borderwidth=1)
             self.puntos.grid(row=11, column=0, columnspan=2, sticky="ew")
+        self._marcar_guardado()     # recién creada no tiene cambios (si no, la pestaña nunca se cargaba)
 
     # ------------------------------------------------------------------
     def cargar(self, gid):
@@ -140,10 +143,10 @@ class Tarjeta(ttk.LabelFrame):
             except Exception:  # noqa: BLE001   (foto dañada: no debe romper la pestaña)
                 self._ph = None
         if self._ph is not None:
-            self.img.configure(image=self._ph, text="", width=THUMB[0], height=THUMB[1])
+            self.img.configure(image=self._ph, text="", compound="none", width=THUMB[0], height=THUMB[1])
         else:
             self._ph = None
-            self.img.configure(image="", text="Sin foto", width=33, height=8)
+            self.img.configure(image=self._vacio, text="Sin foto", compound="center", width=THUMB[0], height=THUMB[1])
         texto, color = aviso_foto(self.foto, portada.ANCHO_LUGAR[self.lugar]) if self.gid else ("", MUTED)
         self.calidad.configure(text=texto, fg=color)
 

@@ -9,6 +9,7 @@ from PIL import Image, ImageTk
 
 from . import storage
 from .config import nombre_medio
+from .gui_inicio import Desplazable
 
 F = "Segoe UI"
 MUTED = "#6B7280"
@@ -106,26 +107,12 @@ class EditorNota(tk.Toplevel):
         self.datos.grid(row=fila, column=1, sticky="ew", pady=3)
         fila += 1
 
-        port = ttk.LabelFrame(izq, text="  Si sale en portada  ", padding=8)
-        port.grid(row=fila, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        port.columnconfigure(1, weight=1)
-        ttk.Label(port, text="Titular de portada").grid(row=0, column=0, sticky="w")
-        self.p_tit = ttk.Entry(port, font=(F, 10, "bold"))
-        self.p_tit.insert(0, self.nota.get("PORTADA_TITULAR") or "")
-        self.p_tit.grid(row=0, column=1, sticky="ew", pady=2)
-        ttk.Label(port, text="Antetítulo de portada").grid(row=1, column=0, sticky="w")
-        self.p_ante = ttk.Entry(port)
-        self.p_ante.insert(0, self.nota.get("PORTADA_ANTE") or "")
-        self.p_ante.grid(row=1, column=1, sticky="ew", pady=2)
-        ttk.Label(port, text="Puntos clave\n(uno por línea)").grid(row=2, column=0, sticky="nw")
-        self.p_puntos = self._texto(port, 2, "\n".join(self.nota.get("PORTADA_PUNTOS") or []))
-        self.p_puntos.grid(row=2, column=1, sticky="ew", pady=2)
-        ttk.Label(port, text="Si lo dejas vacío, Claude lo escribe al generar la vista previa.",
-                  foreground=MUTED).grid(row=3, column=1, sticky="w")
-
         # ---------------- foto
-        der = ttk.Frame(cuerpo)
-        der.grid(row=0, column=1, sticky="nsew")
+        # la columna derecha (foto + portada) se desplaza si la pantalla es baja: así el Cuerpo,
+        # a la izquierda, conserva su altura
+        der_cont = Desplazable(cuerpo, bg="#F3F5F9")
+        der_cont.grid(row=0, column=1, sticky="nsew")
+        der = der_cont.interior
         ttk.Label(der, text="Foto de la nota", font=(F, 11, "bold")).pack(anchor="w")
         self.lbl_foto = tk.Label(der, bg="#E7EEF9", width=PREVIEW[0], height=PREVIEW[1])
         self.lbl_foto.pack(anchor="w", pady=(4, 6))
@@ -144,6 +131,23 @@ class EditorNota(tk.Toplevel):
                                                 g["en_periodico"] is not None else 1))
         ttk.Checkbutton(der, text="Incluir esta noticia en el periódico", variable=self.incluir).pack(
             anchor="w", pady=(16, 0))
+
+        port = ttk.LabelFrame(der, text="  Si sale en portada  ", padding=8)
+        port.pack(fill="x", pady=(14, 0), padx=(0, 4))
+        port.columnconfigure(1, weight=1)
+        ttk.Label(port, text="Titular de portada").grid(row=0, column=0, sticky="w")
+        self.p_tit = ttk.Entry(port, font=(F, 10, "bold"))
+        self.p_tit.insert(0, self.nota.get("PORTADA_TITULAR") or "")
+        self.p_tit.grid(row=0, column=1, sticky="ew", pady=2)
+        ttk.Label(port, text="Antetítulo de portada").grid(row=1, column=0, sticky="w")
+        self.p_ante = ttk.Entry(port)
+        self.p_ante.insert(0, self.nota.get("PORTADA_ANTE") or "")
+        self.p_ante.grid(row=1, column=1, sticky="ew", pady=2)
+        ttk.Label(port, text="Puntos clave\n(uno por línea)").grid(row=2, column=0, sticky="nw")
+        self.p_puntos = self._texto(port, 2, "\n".join(self.nota.get("PORTADA_PUNTOS") or []))
+        self.p_puntos.grid(row=2, column=1, sticky="ew", pady=2)
+        ttk.Label(port, text="Si lo dejas vacío, Claude lo escribe al generar la vista previa.",
+                  foreground=MUTED).grid(row=3, column=1, sticky="w")
 
         self._mostrar_foto()
         self._inicial = self._estado()

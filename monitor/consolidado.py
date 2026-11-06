@@ -8,6 +8,7 @@ sección en vertical y el índice "En esta edición". Al final va una ficha de v
 """
 import io
 import json
+import logging
 import re
 import threading
 import unicodedata
@@ -27,7 +28,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Frame, Paragraph, Spacer, Table, TableStyle
 
-from . import avisos, diseno, storage
+from . import avisos, diseno, logo_vector, storage
 from .config import ASSETS_DIR, BASE_DIR, CONSOLIDADOS_DIR
 
 # ------------------------------------------------------------------ identidad visual
@@ -776,9 +777,40 @@ def _logo_blanco():
     return ImageReader(str(ASSETS_DIR / "logo_blanco.png"))
 
 
+def _logo_svg(blanco=False):
+    """Ruta del logo vectorial, o None si falta (entonces se usa el PNG)."""
+    ruta = ASSETS_DIR / ("logo_blanco.svg" if blanco else "logo.svg")
+    return ruta if ruta.exists() else None
+
+
+def _logo_prop(blanco=False):
+    """Ancho / alto del logo que se va a dibujar (vectorial si está, si no el PNG)."""
+    svg = _logo_svg(blanco)
+    if svg:
+        try:
+            return logo_vector.proporcion(svg)
+        except Exception:  # noqa: BLE001
+            pass
+    return 999 / 297
+
+
+def _dibujar_logo(c, x, y, w, h, blanco=False, anchor="c"):
+    """Dibuja el logo dentro de la caja conservando la proporción: en vectores desde el SVG de
+    assets/, o con el PNG de siempre si el SVG falta o no se puede leer."""
+    svg = _logo_svg(blanco)
+    if svg:
+        try:
+            logo_vector.dibujar(c, svg, x, y, w, h, anchor=anchor)
+            return
+        except Exception:  # noqa: BLE001
+            logging.getLogger("monitor").exception("Logo vectorial %s", svg)
+    c.drawImage(_logo_blanco() if blanco else _logo(), x, y, w, h, mask="auto",
+                preserveAspectRatio=True, anchor=anchor)
+
+
 def _cabecera(c, pg, fecha_txt):
     y = TOP - BAND_H
-    logo_w = BAND_H * 1.15 * 999 / 297
+    logo_w = BAND_H * _logo_prop()     # el cuadro amarillo del logo, del alto de la banda
     num_w = 26
     secc = pg.seccion()
     impar = pg.n % 2 == 1
@@ -831,7 +863,7 @@ def _cabecera(c, pg, fecha_txt):
     c.setFont("Slab", 15)
     c.drawCentredString(nx + num_w / 2, y + 7, str(pg.n))
     # logo
-    c.drawImage(_logo(), lx, y + 1, logo_w, BAND_H * 1.15 - 4, mask="auto", preserveAspectRatio=True)
+    _dibujar_logo(c, lx, y, logo_w, BAND_H)
 
 
 def _pie(c, numero):
@@ -850,8 +882,8 @@ def _portada_lateral(c, pg, arts, paginas_de, numero, ahora, st, anclas_links):
     x, w = pg.x_lat, CW
     y = TOP
     # logo
-    lh = w * 297 / 999
-    c.drawImage(_logo(), x, y - lh, w, lh, mask="auto")
+    lh = w / _logo_prop()
+    _dibujar_logo(c, x, y - lh, w, lh)
     y -= lh + 10
     c.setFillColor(NEGRO)
     c.setFont("Narrow-B", 10.5)
@@ -1069,7 +1101,8 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
     c.addOutlineEntry("Portada", "p1", level=0)
     portada.dibujar(c, cfg, arts, paginas_de, numero, ahora, {
         "AZUL": AZUL, "AZUL_CLARO": AZUL_CLARO, "AMARILLO": AMARILLO, "NEGRO": NEGRO, "W": W, "H": H,
-        "recorte": _recorte, "icono": _icono, "logo": _logo, "logo_blanco": _logo_blanco, "ROJO": ROJO, "fecha_larga": _fecha_larga, "plano": _plano})
+        "recorte": _recorte, "icono": _icono, "logo": _logo, "logo_blanco": _logo_blanco,
+        "dibujar_logo": _dibujar_logo, "logo_prop": _logo_prop, "ROJO": ROJO, "fecha_larga": _fecha_larga, "plano": _plano})
     asignador = avisos.Asignador()
     for pg in paginas:
         c.showPage()

@@ -14,7 +14,7 @@ from .analisis import ciclo_fase2, fase2_lock
 from .config import (BASE_DIR, EXCEL_PATH, PROFILE_DIR, get_api_key, load_config, nombre_medio,
                      normalize_page_url, page_slug, save_config, set_api_key)
 from .editor import EditorNota
-from .gui_inicio import InicioTab, Tip
+from .gui_inicio import Desplazable, InicioTab, Tip
 from .gui_registro import ColaHandler, PanelRegistro
 from .gui_portada import PortadaTab
 from .proceso import cerrar_navegador_monitor
@@ -143,9 +143,12 @@ class App(tk.Tk):
         h = ColaHandler(self.q)
         for nombre in ("monitor", "api"):
             logging.getLogger(nombre).addHandler(h)
-        self.inicio = InicioTab(self.nb, self)
-        self.nb.insert(0, self.inicio, text="  🏠 Inicio  ")
-        self.nb.select(self.inicio)
+        # Inicio y Configuración van en un contenedor con barra: en pantallas bajas nada queda fuera
+        self.pestana_inicio = Desplazable(self.nb)
+        self.inicio = InicioTab(self.pestana_inicio.interior, self)
+        self.inicio.pack(fill="both", expand=True)
+        self.nb.insert(0, self.pestana_inicio, text="  🏠 Inicio  ")
+        self.nb.select(self.pestana_inicio)
         self.nb.bind("<<NotebookTabChanged>>", self._tab_cambiada)
         self.bind_all("<F5>", lambda e: self.check_now())
         self._ayudas()
@@ -164,7 +167,7 @@ class App(tk.Tk):
         """Deja el registro con ~9 líneas visibles (luego se cambia arrastrando el borde)."""
         self.update_idletasks()
         total = self.paned.winfo_height()
-        alto = min(alto, max(100, total // 4))      # en pantallas bajas el registro ocupa menos
+        alto = min(alto, max(90, total // 5))      # en pantallas bajas el registro ocupa menos
         if total > 300:
             self.paned.sashpos(0, max(200, total - alto))
 
@@ -434,7 +437,7 @@ class App(tk.Tk):
         ttk.Label(fb, text="Periodo:").pack(side="left")
         self.d_periodo = ttk.Combobox(fb, state="readonly", width=14,
                                       values=["Hoy", "Últimas 48 h", "Últimos 7 días", "Todo"])
-        self.d_periodo.set("Últimas 48 h")
+        self.d_periodo.set("Todo")      # las pendientes viejas también deben verse
         self.d_periodo.pack(side="left", padx=(4, 12))
         ttk.Label(fb, text="Tema:").pack(side="left")
         self.d_tema = ttk.Combobox(fb, state="readonly", width=20, values=["Todos"] + self.cfg["temas"])
@@ -451,11 +454,10 @@ class App(tk.Tk):
                         command=self._refresh_dashboard).pack(side="left")
         for cb in (self.d_periodo, self.d_tema):
             cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_dashboard())
-        ttk.Button(fb, text="Abrir Excel", command=self._open_excel).pack(side="right")
-        ttk.Button(fb, text="📂 Publicados", command=self._publicados).pack(side="right", padx=4)
-        ttk.Button(fb, text="📰 Generar periódico", style="Accent.TButton",
-                   command=self._publicar).pack(side="right", padx=(4, 0))
-        ttk.Button(fb, text="👁 Vista previa", command=self._vista_previa).pack(side="right")
+        # (la ayuda va en la fila de filtros; los botones de acción, en la fila de abajo: así entran
+        # completos también en pantallas de 1280 px)
+        self.lbl_va = ttk.Label(fb, text="", style="Muted.TLabel")      # «N noticia(s) irán…»
+        self.lbl_va.pack(side="right")
 
         # barra del editor
         eb = ttk.Frame(tab)
@@ -465,10 +467,11 @@ class App(tk.Tk):
         ttk.Button(eb, text="☑ Incluir / ☐ Excluir", command=self._toggle_incluir).pack(side="left", padx=4)
         ttk.Button(eb, text="Incluir todas", command=lambda: self._incluir_todas(True)).pack(side="left")
         ttk.Button(eb, text="Excluir todas", command=lambda: self._incluir_todas(False)).pack(side="left", padx=4)
-        self.lbl_va = ttk.Label(eb, text="", style="Muted.TLabel")
-        self.lbl_va.pack(side="left", padx=10)
-        ttk.Label(eb, text="Clic en ☑ para incluir o sacar · doble clic para editar texto y foto",
-                  style="Muted.TLabel").pack(side="right")
+        ttk.Button(eb, text="Abrir Excel", command=self._open_excel).pack(side="right")
+        ttk.Button(eb, text="📂 Publicados", command=self._publicados).pack(side="right", padx=4)
+        ttk.Button(eb, text="📰 Generar periódico", style="Accent.TButton",
+                   command=self._publicar).pack(side="right", padx=(4, 0))
+        ttk.Button(eb, text="👁 Vista previa", command=self._vista_previa).pack(side="right")
 
         # chips por tema + buscador
         fila_chips = ttk.Frame(tab)
@@ -520,9 +523,10 @@ class App(tk.Tk):
 
     # ================================================================== pestaña Configuración
     def _build_config(self):
-        tab = ttk.Frame(self.nb, padding=12)
-        self.nb.add(tab, text="  ⚙ Configuración  ")
-        self.tab_config = tab
+        cont = Desplazable(self.nb, padding=12)
+        self.nb.add(cont, text="  ⚙ Configuración  ")
+        self.tab_config = cont
+        tab = cont.interior
         tab.columnconfigure(0, weight=1)
         tab.columnconfigure(1, weight=1)
         tab.columnconfigure(2, weight=1)
@@ -907,7 +911,7 @@ class App(tk.Tk):
         err = f"   ⚠ {self.last_error[:90]}" if self.last_error else ""
         self.sched.set(f"Última revisión: {last}   ·   Próxima: {nxt}{err}")
         self._ticks = getattr(self, "_ticks", 0) + 1      # (el segundo exacto a veces se salta)
-        if self._ticks % 10 == 0 and hasattr(self, "inicio") and self.nb.select() == str(self.inicio):
+        if self._ticks % 10 == 0 and hasattr(self, "inicio") and self.nb.select() == str(self.pestana_inicio):
             self.inicio.refrescar()
 
     def en_ui(self, fn):
@@ -1357,7 +1361,7 @@ class App(tk.Tk):
         if self.nb.select() == str(self.portada_tab):
             if not self.portada_tab.hay_cambios():
                 self.portada_tab.recargar()
-        elif hasattr(self, "inicio") and self.nb.select() == str(self.inicio):
+        elif hasattr(self, "inicio") and self.nb.select() == str(self.pestana_inicio):
             self.inicio.refrescar()
 
     def _editar(self):

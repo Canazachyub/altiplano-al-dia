@@ -369,8 +369,13 @@ def dibujar(c, cfg, arts_todos, paginas_de, numero, ahora, k):
     c.setFillColor(AZUL)
     c.rect(M, top - cab_h, cab_w, cab_h, stroke=0, fill=1)
     lw = cab_w - 30
-    lh = lw * 297 / 999
-    c.drawImage(k["logo_blanco"](), M + 12, top - 8 - lh, lw, lh, mask="auto")
+    if "dibujar_logo" in k:               # logo vectorial (cae al PNG si falta el SVG)
+        lh = lw / k["logo_prop"](True)
+        alto = cab_h - 30                 # espacio entre el borde de arriba y el lema
+        k["dibujar_logo"](c, M + 12, top - 8 - (alto - lh) / 2 - lh, lw, lh, blanco=True)
+    else:
+        lh = lw * 297 / 999
+        c.drawImage(k["logo_blanco"](), M + 12, top - 8 - lh, lw, lh, mask="auto")
     c.setFillColor(AMARILLO)
     lema = _t("lema", **v)
     c.setFont("P-EtqB", _cabe(lema, "P-EtqB", 11, cab_w - 28))
