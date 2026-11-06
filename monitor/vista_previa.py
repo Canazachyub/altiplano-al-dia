@@ -7,6 +7,7 @@ periódico o ponerla en un lugar de la portada. Desde aquí también se publica.
 import json
 import logging
 import os
+import random
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -457,7 +458,62 @@ class VistaPrevia(tk.Toplevel):
             m.add_separator()
             m.add_command(label=f"✂  Separar las {len(fusion.get('ids', []))} notas que se unieron",
                           command=lambda: self._separar(gid))
+        self._menu_foto(m, g)
         m.tk_popup(e.x_root, e.y_root)
+
+    def _menu_foto(self, m, g):
+        """Foto limpia (sin logos ni textos encima) u original de Facebook."""
+        if not g or self.edicion:
+            return
+        from . import fotos_limpias
+        try:
+            nota = json.loads(g["nota_json"] or "{}")
+        except (TypeError, ValueError):
+            return
+        orig = consolidado.imagen_original(g, nota)
+        if not orig:
+            return
+        est = fotos_limpias.estado(orig).get("estado")
+        m.add_separator()
+        if nota.get("_FOTO_ORIGINAL"):
+            m.add_command(label="🧽  Usar la foto limpia (sin rótulos)",
+                          command=lambda: self._foto(g["id"], original=False))
+        elif est == "limpia":
+            m.add_command(label="🖼  Usar la foto original de Facebook",
+                          command=lambda: self._foto(g["id"], original=True))
+            m.add_command(label="↻  Volver a limpiar esta foto", command=lambda: self._foto(g["id"], rehacer=orig))
+        else:
+            m.add_command(label="🧽  Limpiar esta foto (quitar logos y textos encima)",
+                          command=lambda: self._foto(g["id"], rehacer=orig, forzar=True))
+
+    def _foto(self, gid, original=None, rehacer=None, forzar=False):
+        from . import fotos_limpias
+        g = storage.get_grupo(gid)
+        nota = json.loads(g["nota_json"] or "{}")
+        if original is not None:
+            if original:
+                nota["_FOTO_ORIGINAL"] = True
+            else:
+                nota.pop("_FOTO_ORIGINAL", None)
+            storage.actualizar_grupo(gid, nota_json=json.dumps(nota, ensure_ascii=False))
+            self.generar()
+            return
+        app = self.app
+
+        def run():
+            try:
+                if not fotos_limpias.iniciar_studio():
+                    app.q.put(("error", "No se pudo abrir Qwen Imagen Studio para limpiar la foto."))
+                    return
+                # "volver a limpiar" usa otra semilla: sale otra versión
+                limpia = fotos_limpias.limpiar(rehacer, semilla=None if forzar else random.randint(1, 2**30))
+                fotos_limpias._anotar(rehacer, estado="limpia", ruta=limpia, gid=gid)
+                app.q.put(("aviso_ok", "Foto limpia lista. Vuelve a generar la vista previa para verla."))
+            except Exception as e:  # noqa: BLE001
+                app.q.put(("error", f"Limpiar foto: {e}"))
+
+        app._aviso("Limpiando la foto con Qwen (~1 minuto)…", "info", 6000)
+        threading.Thread(target=run, daemon=True).start()
 
     def _separar(self, gid):
         """Deshace una unión del paso editorial: cada noticia vuelve a salir por separado."""

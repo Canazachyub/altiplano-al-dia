@@ -379,6 +379,13 @@ def ciclo_fase2(cfg: dict, emit=lambda *a: None, forzar_pdf: bool = False, cance
                 except Exception as e:  # noqa: BLE001
                     api_log.exception("paso_editorial")
                     emit("error", f"Revisión editorial: {e}")
+            if not (cancelar and cancelar()):
+                # fotos: quitar logos y textos sobrepuestos (Qwen local, en su propio hilo: no frena el periódico)
+                try:
+                    from .fotos_limpias import en_segundo_plano
+                    out["fotos"] = en_segundo_plano(cfg, emit, cancelar)
+                except Exception:  # noqa: BLE001
+                    api_log.exception("fotos_limpias")
         else:
             emit("error", "Fase 2 omitida: falta la API key de Claude (pestaña Configuración).")
         try:

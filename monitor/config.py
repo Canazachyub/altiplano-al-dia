@@ -36,6 +36,7 @@ DEFAULTS = {
     "fase2_auto": True,             # cruce + clasificación con Claude al final de cada revisión
     "revision_automatica": True,    # False = solo se revisa al pulsar "Revisar ahora"
     "pdf_consolidado_auto": False,  # el periódico se genera a mano tras revisar (Dashboard)
+    "limpiar_fotos": True,          # quitar logos y textos sobrepuestos de las fotos (Qwen local)
     "ventana_cruce_horas": 48,
     "ambitos": ["DISTRITAL", "LOCAL", "REGIONAL", "NACIONAL", "INTERNACIONAL"],
     "temas": ["Política", "Deportes", "Economía", "Educación", "Salud", "Seguridad/Policiales",

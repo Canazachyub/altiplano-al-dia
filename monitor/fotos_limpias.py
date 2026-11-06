@@ -1,0 +1,298 @@
+"""Limpieza de las fotos de Facebook para el boletín.
+
+Las páginas publican sus fotos con rótulos encima (logo del medio, titular, iconos de redes, teléfono,
+franjas de color, marcos). Antes de maquetar:
+
+1. Qwen2.5-VL (Ollama, local) mira cada foto y dice si trae rótulos encima. Las limpias se dejan como están.
+2. Las que sí traen pasan por Qwen Imagen Studio (Qwen-Image 2.1, local, C:\\PROGRAMACION\\Qwen imagen), que
+   borra solo lo sobrepuesto y rellena la escena sin cambiar personas, lugares ni encuadre.
+
+El original nunca se toca. Las versiones limpias van a data/fotos_limpias/ y un índice recuerda qué se hizo con
+cada foto, así cada una se procesa una sola vez. En la vista previa se puede volver a la original.
+"""
+import base64
+import hashlib
+import io
+import json
+import logging
+import subprocess
+import threading
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+from PIL import Image
+
+from .config import BASE_DIR
+
+log = logging.getLogger("monitor")
+
+DIR = BASE_DIR / "data" / "fotos_limpias"
+INDICE = DIR / "indice.json"
+STUDIO_DIR = Path(r"C:\PROGRAMACION\Qwen imagen\qwen-imagen-studio")
+STUDIO_URL = "http://127.0.0.1:7871"
+OLLAMA_URL = "http://127.0.0.1:11434"
+MODELO_VL = "qwen2.5vl:7b"
+SEMILLA = 1234                       # fija: la misma foto da siempre el mismo resultado
+
+PREGUNTA = ("Look at this news photo. Has someone added graphic elements ON TOP of the photograph, such as "
+            "overlaid text, headlines, captions, a media logo or watermark, social media icons, phone numbers, "
+            "colored banners or a decorative frame/border? Ignore text that is physically part of the scene "
+            "(street signs, shirts, posters on walls). Answer only YES or NO.")
+ORDEN = ("Edit image 1: remove ALL overlaid graphics added on top of the photograph: text, headlines, captions, "
+         "logos, watermarks, social media icons, phone numbers, colored banners, labels, borders, frames and "
+         "decorative dot patterns. Fill those areas naturally with the surrounding scene. Keep the photograph "
+         "itself exactly the same: same people, faces, buildings, objects, composition, colors and lighting. "
+         "Add nothing new.")
+
+_lock = threading.Lock()             # una sola limpieza a la vez (la GPU no da para dos)
+_indice_lock = threading.Lock()
+
+
+# ------------------------------------------------------------------ índice
+def _clave(ruta: str) -> str:
+    return str(Path(ruta).resolve()).lower()
+
+
+def _leer() -> dict:
+    try:
+        return json.loads(INDICE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _anotar(ruta: str, **datos) -> None:
+    with _indice_lock:
+        d = _leer()
+        d[_clave(ruta)] = {**datos, "fecha": datetime.now().isoformat(timespec="seconds")}
+        DIR.mkdir(parents=True, exist_ok=True)
+        tmp = INDICE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(INDICE)
+
+
+def estado(ruta: str) -> dict:
+    return _leer().get(_clave(ruta), {})
+
+
+def ruta_para(ruta: str | None) -> str | None:
+    """La versión limpia de una foto si existe; si no, la original."""
+    if not ruta:
+        return ruta
+    e = estado(ruta)
+    if e.get("estado") == "limpia" and e.get("ruta") and Path(e["ruta"]).exists():
+        return e["ruta"]
+    return ruta
+
+
+def descartar(ruta: str) -> None:
+    """Olvida lo hecho con una foto (para volver a limpiarla)."""
+    with _indice_lock:
+        d = _leer()
+        d.pop(_clave(ruta), None)
+        DIR.mkdir(parents=True, exist_ok=True)
+        INDICE.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+# ------------------------------------------------------------------ servicios locales
+def _get(url, timeout=5):
+    return json.load(urllib.request.urlopen(url, timeout=timeout))
+
+
+def _post(url, datos, timeout=60):
+    req = urllib.request.Request(url, json.dumps(datos).encode(), {"Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(req, timeout=timeout))
+
+
+def studio_listo() -> bool:
+    try:
+        return _get(STUDIO_URL + "/api/status", 3).get("app") == "qwen-turbo-local"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def iniciar_studio(espera=90) -> bool:
+    """Abre Qwen Imagen Studio en segundo plano (sin navegador) si no está abierto."""
+    if studio_listo():
+        return True
+    script = STUDIO_DIR / "scripts" / "start.ps1"
+    if not script.exists():
+        return False
+    import os
+    env = dict(os.environ, PSModulePath="")
+    subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
+                      "-NoBrowser"], cwd=str(STUDIO_DIR), env=env, creationflags=0x08000000)  # sin ventana
+    fin = time.time() + espera
+    while time.time() < fin:
+        if studio_listo():
+            return True
+        time.sleep(2)
+    return False
+
+
+def _jpeg_b64(ruta, lado=768) -> str:
+    im = Image.open(ruta).convert("RGB")
+    im.thumbnail((lado, lado))
+    b = io.BytesIO()
+    im.save(b, "JPEG", quality=88)
+    return base64.b64encode(b.getvalue()).decode()
+
+
+def tiene_rotulos(ruta: str) -> bool | None:
+    """True/False según Qwen2.5-VL; None si Ollama no está disponible."""
+    try:
+        r = _post(OLLAMA_URL + "/api/generate", {
+            "model": MODELO_VL, "prompt": PREGUNTA, "images": [_jpeg_b64(ruta)], "stream": False,
+            "options": {"temperature": 0}, "keep_alive": "1m"}, timeout=300)
+    except Exception as e:  # noqa: BLE001
+        log.info("Ollama no disponible para revisar fotos: %s", e)
+        return None
+    return r.get("response", "").strip().upper().startswith("Y")
+
+
+def _soltar_vl():
+    """Libera la memoria de la GPU que usa Qwen2.5-VL antes de editar imágenes."""
+    try:
+        _post(OLLAMA_URL + "/api/generate", {"model": MODELO_VL, "keep_alive": 0}, timeout=30)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _medidas(w, h, lado=1024):
+    f = lado / max(w, h)
+    return max(256, round(w * f / 32) * 32), max(256, round(h * f / 32) * 32)
+
+
+def limpiar(ruta: str, cancelar=None, semilla=None) -> str:
+    """Borra los rótulos de una foto con Qwen Imagen Studio. Devuelve la ruta de la versión limpia."""
+    im = Image.open(ruta).convert("RGB")
+    w, h = _medidas(*im.size)
+    b = io.BytesIO()
+    im.resize((w, h), Image.LANCZOS).save(b, "PNG")
+    ref = "data:image/png;base64," + base64.b64encode(b.getvalue()).decode()
+    datos = {"prompt": ORDEN, "refs": [ref], "width": w, "height": h, "steps": 6, "count": 1,
+             "seed": semilla or SEMILLA}
+    for _ in range(90):                                   # si el estudio está ocupado, se espera el turno
+        try:
+            job = _post(STUDIO_URL + "/api/jobs", datos, 60)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 409:
+                raise RuntimeError(json.loads(e.read() or b"{}").get("error") or str(e)) from e
+            time.sleep(4)
+    else:
+        raise RuntimeError("Qwen Imagen Studio sigue ocupado con otra imagen")
+    while job["status"] not in ("completed", "failed", "cancelled", "error"):
+        if cancelar and cancelar():
+            try:
+                _post(f"{STUDIO_URL}/api/jobs/{job['id']}/cancel", {}, 10)
+            except Exception:  # noqa: BLE001
+                pass
+        time.sleep(2)
+        job = _get(f"{STUDIO_URL}/api/jobs/{job['id']}", 30)
+    if not job.get("images"):
+        raise RuntimeError(job.get("message") or "Qwen Imagen Studio no devolvió imagen")
+    png = urllib.request.urlopen(STUDIO_URL + job["images"][0]["src"], timeout=60).read()
+    DIR.mkdir(parents=True, exist_ok=True)
+    nombre = hashlib.sha1(_clave(ruta).encode()).hexdigest()[:16] + ".jpg"
+    destino = DIR / nombre
+    Image.open(io.BytesIO(png)).convert("RGB").save(destino, "JPEG", quality=92)
+    return str(destino)
+
+
+# ------------------------------------------------------------------ paso del boletín
+def fotos_del_boletin():
+    """[(gid, ruta_original, impacto)] de las fotos que usaría el próximo boletín."""
+    from . import storage
+    from .consolidado import imagen_original
+    from .editorial import impacto
+    out = []
+    for g in storage.grupos_para_pdf():
+        try:
+            nota = json.loads(g["nota_json"])
+        except (TypeError, ValueError):
+            continue
+        if nota.get("_FOTO_ORIGINAL"):
+            continue
+        ruta = imagen_original(g, nota)
+        if ruta:
+            out.append((g["id"], ruta, impacto(nota)))
+    out.sort(key=lambda x: -x[2])                         # primero las de más impacto (portada)
+    return out
+
+
+def paso_limpieza(cfg, emit, cancelar=None, forzar=False) -> dict:
+    """Revisa y limpia las fotos del próximo boletín. Devuelve {"limpias", "sin_rotulos", "errores"}."""
+    r = {"limpias": 0, "sin_rotulos": 0, "errores": 0, "omitido": ""}
+    if not cfg.get("limpiar_fotos", True):
+        r["omitido"] = "desactivado"
+        return r
+    if not _lock.acquire(blocking=False):
+        r["omitido"] = "ya en curso"
+        return r
+    try:
+        fotos = [f for f in fotos_del_boletin() if forzar or not estado(f[1])]
+        if not fotos:
+            return r
+        # 1) qué fotos traen rótulos (rápido)
+        sucias = []
+        for i, (gid, ruta, _) in enumerate(fotos, 1):
+            if cancelar and cancelar():
+                return r
+            emit("status", f"Revisando rótulos en las fotos {i}/{len(fotos)}…")
+            t = tiene_rotulos(ruta)
+            if t is False:
+                _anotar(ruta, estado="sin_rotulos")
+                r["sin_rotulos"] += 1
+            else:
+                sucias.append((gid, ruta))
+        _soltar_vl()
+        if not sucias:
+            return r
+        if not iniciar_studio():
+            emit("error", "Limpieza de fotos: no se pudo abrir Qwen Imagen Studio "
+                          f"({STUDIO_DIR}). Las fotos salen como vienen de Facebook.")
+            r["omitido"] = "sin estudio"
+            return r
+        # 2) borrar los rótulos (lento: ~1 min por foto en la GPU)
+        for i, (gid, ruta) in enumerate(sucias, 1):
+            if cancelar and cancelar():
+                break
+            emit("status", f"Limpiando fotos con Qwen ({i}/{len(sucias)}): se quitan logos y textos encima…")
+            try:
+                t0 = time.time()
+                limpia = limpiar(ruta, cancelar)
+                _anotar(ruta, estado="limpia", ruta=limpia, gid=gid, segundos=round(time.time() - t0))
+                r["limpias"] += 1
+            except Exception as e:  # noqa: BLE001
+                log.exception("Limpieza de foto %s", ruta)
+                _anotar(ruta, estado="error", error=str(e)[:300])
+                r["errores"] += 1
+        return r
+    finally:
+        _lock.release()
+
+
+def en_segundo_plano(cfg, emit, cancelar=None, al_terminar=None) -> bool:
+    """Lanza paso_limpieza en un hilo propio (no bloquea el armado del periódico)."""
+    if _lock.locked() or not cfg.get("limpiar_fotos", True):
+        return False
+
+    def run():
+        try:
+            res = paso_limpieza(cfg, emit, cancelar)
+            if res["limpias"] or res["errores"]:
+                emit("aviso_ok", f"Fotos limpias: {res['limpias']} sin rótulos nuevas"
+                     + (f" · {res['errores']} no se pudieron limpiar" if res["errores"] else "")
+                     + ". La vista previa ya las usa.")
+        except Exception as e:  # noqa: BLE001
+            log.exception("Limpieza de fotos")
+            emit("error", f"Limpieza de fotos: {e}")
+        finally:
+            if al_terminar:
+                al_terminar()
+
+    threading.Thread(target=run, daemon=True).start()
+    return True

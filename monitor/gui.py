@@ -472,6 +472,11 @@ class App(tk.Tk):
         Tip(b_ed, "Claude revisa las noticias que van: une en una sola nota completa las que cuentan el "
                   "mismo hecho y ordena todo por impacto (crimen, corrupción, tragedias van primero). "
                   "Se hace solo al agrupar; usa este botón si editaste o agregaste noticias a mano.")
+        b_fl = ttk.Button(eb, text="🧽 Limpiar fotos", command=self._limpiar_fotos)
+        b_fl.pack(side="left", padx=4)
+        Tip(b_fl, "Quita de las fotos los logos, titulares, iconos y marcos que los medios ponen encima, con "
+                  "Qwen en tu PC (Qwen Imagen Studio). Solo toca las fotos que tienen rótulos; ~1 minuto por "
+                  "foto. Se hace solo después de agrupar.")
         ttk.Button(eb, text="Abrir Excel", command=self._open_excel).pack(side="right")
         ttk.Button(eb, text="📂 Publicados", command=self._publicados).pack(side="right", padx=4)
         ttk.Button(eb, text="📰 Generar periódico", style="Accent.TButton",
@@ -873,6 +878,16 @@ class App(tk.Tk):
                 self.q.put(("fase2_manual_fin", None))
 
         threading.Thread(target=run, daemon=True).start()
+
+    def _limpiar_fotos(self):
+        """Quita los rótulos sobrepuestos de las fotos del próximo periódico (Qwen local, en segundo plano)."""
+        from .fotos_limpias import en_segundo_plano
+        cfg = dict(self._cfg_actual(), limpiar_fotos=True)
+        if en_segundo_plano(cfg, self._emit):
+            self._aviso("Limpiando las fotos en segundo plano (~1 min por foto con rótulos). "
+                        "Puedes seguir trabajando; te aviso al terminar.", "info", 7000)
+        else:
+            self._aviso("Ya se están limpiando las fotos.", "warn")
 
     def _revision_editorial(self):
         """Paso editorial a pedido: unir notas del mismo hecho y ordenar por impacto (Claude)."""

@@ -218,21 +218,48 @@ CUADRITO = '<font name="ZapfDingbats" size="6" color="#043F9B">n</font> '
 
 
 # ------------------------------------------------------------------ artículos
-def _articulo(g, cfg) -> dict:
-    nota = json.loads(g["nota_json"])
-    posts = storage.posts_de_grupo(g["id"])
-    img = None
-    candidatas = [] if nota.get("_SIN_FOTO") else (
-        [nota.get("_IMAGEN")] + [p["imagen"] if "imagen" in p.keys() else None for p in posts])
-    for ruta in candidatas:   # _IMAGEN = foto elegida a mano en el editor
+def imagen_original(g, nota, posts=None):
+    """Foto que lleva la nota tal como vino de Facebook (_IMAGEN = elegida a mano en el editor)."""
+    if nota.get("_SIN_FOTO"):
+        return None
+    posts = posts if posts is not None else storage.posts_de_grupo(g["id"])
+    for ruta in [nota.get("_IMAGEN")] + [p["imagen"] if "imagen" in p.keys() else None for p in posts]:
         if ruta:
             try:
                 with Image.open(ruta) as im:
                     im.verify()
-                img = ruta
-                break
+                return ruta
             except Exception:  # noqa: BLE001
                 continue
+    return None
+
+
+def _credito_foto(ruta, posts, cfg):
+    """Nombre del medio que publicó la foto (se le da el crédito en el pie)."""
+    from .config import nombre_medio
+    for p in posts:
+        if "imagen" in p.keys() and p["imagen"] and ruta and Path(p["imagen"]) == Path(ruta):
+            return nombre_medio(p["pagina"], cfg)
+    return ""
+
+
+def _pie_con_credito(pie, medio):
+    if not medio:
+        return pie
+    pie = pie.strip()
+    if pie and not pie.endswith((".", "!", "?")):
+        pie += "."
+    return f"{pie} Foto: {medio}.".strip()
+
+
+def _articulo(g, cfg) -> dict:
+    nota = json.loads(g["nota_json"])
+    posts = storage.posts_de_grupo(g["id"])
+    original = imagen_original(g, nota, posts)
+    img = original
+    if original and not nota.get("_FOTO_ORIGINAL"):
+        from .fotos_limpias import ruta_para
+        img = ruta_para(original)          # versión sin logos ni textos encima, si ya se limpió
     parrafos = [x.strip() for x in (nota.get("CUERPO") or "").split("\n\n") if x.strip()]
     ante = _plano(nota.get("ANTETITULO") or "")
     if not ante:
@@ -241,7 +268,9 @@ def _articulo(g, cfg) -> dict:
     return {
         "gid": g["id"], "ambito": g["ambito"] or "REGIONAL", "tema": g["tema"] or "",
         "ante": ante.upper().rstrip("."), "titular": _plano(nota.get("TITULAR") or g["titular"] or ""),
-        "lugar": _plano(nota.get("LUGAR") or "").rstrip("."), "pie": _plano(nota.get("PIE_FOTO") or ""),
+        "lugar": _plano(nota.get("LUGAR") or "").rstrip("."),
+        "pie": _pie_con_credito(_plano(nota.get("PIE_FOTO") or ""), _credito_foto(original, posts, cfg) if img else ""),
+        "img_original": original,
         "parrafos": parrafos, "img": img, "act": g["estado_pdf"] == "actualizacion",
         "palabras": sum(len(x.split()) for x in parrafos), "n_medios": storage.n_medios(g),
         "nota": nota, "grupo": g,
