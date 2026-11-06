@@ -121,13 +121,16 @@ def _nota(g, cfg, usados: set) -> dict | None:
     }
 
 
-def _boletines() -> list:
+def _boletines(dia=None) -> list:
+    """Boletines PDF para la web (dia 'AAAA-MM-DD' = solo los de ese día)."""
     out = []
     try:
         import pypdfium2 as pdfium
     except ImportError:
         pdfium = None
     for c in storage.list_consolidados()[:MAX_BOLETINES]:
+        if dia and (c["fecha"] or "")[:10] != dia:
+            continue
         src = Path(c["path"] or "")
         if not src.exists():
             continue
@@ -186,12 +189,16 @@ def armar(cfg):
         shutil.rmtree(STAGE)
     (STAGE / "data").mkdir(parents=True)
     usados, notas, gids = set(), [], []
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    solo_hoy = cfg.get("web_solo_hoy", True)        # como el boletín: en la web solo lo del día
     for g in storage.grupos_web():
+        if solo_hoy and storage.dia_de(g) != hoy:
+            continue
         n = _nota(g, cfg, usados)
         if n:
             notas.append(n)
             gids.append(g["id"])
-    bols = _boletines()
+    bols = _boletines(hoy if solo_hoy else None)
     (STAGE / "data" / "noticias.json").write_text(json.dumps(notas, ensure_ascii=False, indent=1), encoding="utf-8")
     (STAGE / "data" / "boletines.json").write_text(json.dumps(bols, ensure_ascii=False, indent=1), encoding="utf-8")
     if (cfg.get("web_url") or "").strip():

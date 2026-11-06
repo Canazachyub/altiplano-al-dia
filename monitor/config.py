@@ -48,6 +48,7 @@ DEFAULTS = {
     "web_rama": "main",
     "web_ruta": "public",           # carpeta del repositorio donde van data/, img/ y boletines/
     "web_url": "",                  # dirección pública (https://altiplanoaldia.pe) para RSS y sitemap
+    "web_solo_hoy": True,           # la web muestra solo las noticias y el boletín del día
 }
 
 
