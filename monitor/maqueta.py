@@ -400,7 +400,7 @@ def _pagina_noticias(c, pagina, st, asignador, anclas, D, numero, ahora):
         h.usada = usada
         C._dibujar(c, ops, x0, ytop, anclas)
         portada.ZONAS.append({"pag": pagina["n"], "gid": h.art["gid"], "lugar": None, "rol": h.rol,
-                              "clave": h.clave, "rect": [round(h.x0, 1), round(h.bot, 1), round(h.x1, 1),
+                              "clave": h.clave, "seccion": sec, "rect": [round(h.x0, 1), round(h.bot, 1), round(h.x1, 1),
                                                          round(h.top, 1)]})
         c.addOutlineEntry(C._corto(h.art["titular"]), f"g{h.art['gid']}", level=1)
         # lo que sobra al pie del hueco: datos clave de la nota

@@ -142,6 +142,16 @@ class VistaPrevia(tk.Toplevel):
         ttk.Button(b, text="⟳ Actualizar (F5)", style="Header.TButton", command=self.generar).pack(side="right", padx=4)
         ttk.Button(b, text="🎨 Diseño", style="Header.TButton", command=self._toggle_diseno).pack(side="right", padx=4)
         ttk.Button(b, text="📢 Avisos", style="Header.TButton", command=self._gestor_avisos).pack(side="right", padx=4)
+        if not self.edicion:
+            ttk.Button(b, text="✍ Nota propia", style="Header.TButton",
+                       command=lambda: self._nota_propia()).pack(side="right", padx=4)
+            from .maqueta import PLANTILLAS
+            self.cb_plantilla = ttk.Combobox(b, state="readonly", width=18,
+                                             values=["Plantilla del día"] + [f"Plantilla {p['nombre']}"
+                                                                             for p in PLANTILLAS])
+            self.cb_plantilla.set("Plantilla del día")
+            self.cb_plantilla.pack(side="right", padx=4)
+            self.cb_plantilla.bind("<<ComboboxSelected>>", self._cambiar_plantilla)
         ttk.Button(b, text="Ajustar", style="Header.TButton", command=lambda: self._zoom(None)).pack(side="right", padx=4)
         ttk.Button(b, text="+", width=3, style="Header.TButton", command=lambda: self._zoom(+1)).pack(side="right")
         ttk.Button(b, text="−", width=3, style="Header.TButton", command=lambda: self._zoom(-1)).pack(side="right", padx=4)
@@ -160,6 +170,9 @@ class VistaPrevia(tk.Toplevel):
                          bg="#E8F0FE", fg="#1D4ED8", font=(F, 9), justify="left", anchor="w")
         ayuda.pack(side="left", padx=14, pady=4, fill="x", expand=True)
         h.bind("<Configure>", lambda e: ayuda.configure(wraplength=max(300, e.width - 30)))
+        self.cupos = tk.Label(self, text="", bg="#FFF8E1", fg="#5B4200", font=(F, 9, "bold"), anchor="w",
+                              padx=14, pady=3)
+        self.cupos.pack(fill="x")
 
     @staticmethod
     def _escribiendo(e):
@@ -258,6 +271,7 @@ class VistaPrevia(tk.Toplevel):
         else:
             self.lbl_tit.configure(text=f"Vista previa · boletín N° {storage.siguiente_consolidado()} · {n} noticias")
         self.pagina = min(self.pagina, len(self.doc) - 1)
+        self._mostrar_cupos()
         self._miniaturas()
         self._mensaje(None)
         self._mostrar()
@@ -459,7 +473,77 @@ class VistaPrevia(tk.Toplevel):
             m.add_command(label=f"✂  Separar las {len(fusion.get('ids', []))} notas que se unieron",
                           command=lambda: self._separar(gid))
         self._menu_foto(m, g)
+        if not self.edicion:
+            self._menu_mesa(m, gid, z)
         m.tk_popup(e.x_root, e.y_root)
+
+    # ------------------------------------------------------------------ mesa de edición
+    def _menu_mesa(self, m, gid, z):
+        from . import mesa
+        from .maqueta import NOTICIAS
+        m.add_separator()
+        m.add_command(label="🖼  Cambiar la foto (desde un archivo)…", command=lambda: self._foto_archivo(gid))
+        m.add_command(label="🚫  Quitar la foto", command=lambda: (mesa.quitar_foto(gid), self.generar()))
+        sub = tk.Menu(m, tearoff=0)
+        for s in NOTICIAS + ["NACIONAL"]:
+            sub.add_command(label=s.capitalize(), command=lambda s=s: (mesa.poner_seccion(gid, s), self.generar()))
+        m.add_cascade(label="🗂  Cambiar de sección", menu=sub)
+        if z.get("rol"):
+            m.add_command(label="📏  Ajustar el texto a este espacio (Claude)",
+                          command=lambda: self._ajustar_largo(gid, z["rol"]))
+
+    def _foto_archivo(self, gid):
+        from tkinter import filedialog
+        from . import mesa
+        ruta = filedialog.askopenfilename(parent=self, title="Nueva foto de la nota",
+                                          filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.webp *.bmp")])
+        if ruta:
+            mesa.poner_foto(gid, ruta)
+            self.generar()
+
+    def _ajustar_largo(self, gid, rol):
+        app = self.app
+
+        def run():
+            from .redaccion import ajustar
+            try:
+                ajustar(app._cfg_actual(), gid, rol)
+                app.q.put(("aviso_ok", "Texto ajustado al espacio."))
+            except Exception as e:  # noqa: BLE001
+                app.q.put(("error", f"Ajustar texto: {e}"))
+            finally:
+                app.en_ui(self.generar)
+
+        app._aviso("Claude está ajustando el texto al espacio…", "info", 5000)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _nota_propia(self, pag=None, seccion=None, rol=None):
+        from .mesa import NotaPropia
+        NotaPropia(self, pag, seccion, rol)
+
+    def _cambiar_plantilla(self, _e=None):
+        from . import maqueta
+        i = self.cb_plantilla.current()
+        if i <= 0:
+            maqueta.ELECCION_PATH.unlink(missing_ok=True)
+        else:
+            maqueta.elegir_plantilla(i - 1)
+        self.generar()
+
+    def _mostrar_cupos(self):
+        from . import mesa
+        if self.edicion:
+            self.cupos.configure(text="")
+            return
+        filas = mesa.cupos_y_llenos(self.mapa)
+        if not filas:
+            self.cupos.configure(text="")
+            return
+        partes = [f"{s.capitalize()} {a}/{t}" + (" ✔" if a >= t else "") for s, a, t in filas]
+        faltan = sum(t - a for _, a, t in filas)
+        self.cupos.configure(text="Notas por sección:  " + "   ·   ".join(partes)
+                             + (f"      → faltan {faltan}: clic en un espacio libre ▸ «Escribir una nota propia»"
+                                if faltan else "      → edición completa"))
 
     def _menu_foto(self, m, g):
         """Foto limpia (sin logos ni textos encima) u original de Facebook."""
@@ -607,6 +691,9 @@ class VistaPrevia(tk.Toplevel):
         clave = z.get("clave", "")
         m = tk.Menu(self, tearoff=0)
         m.add_command(label="📰  Poner una noticia aquí", command=lambda: ElegirNoticia(self, z["pag"]))
+        if not self.edicion:
+            m.add_command(label="✍  Escribir una nota propia aquí",
+                          command=lambda: self._nota_propia(z["pag"], z.get("seccion"), z.get("rol")))
         sub = tk.Menu(m, tearoff=0)
         for a in d["avisos"]:
             ok = avisos.listo(a)

@@ -279,10 +279,21 @@ def grupos_para_pdf(dia: str | None = None):
          " AND COALESCE(en_periodico, 1)=1")
     args = ()
     if dia:
-        q += " AND substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ?"
-        args = (dia,)
+        # las del día, y las que se pusieron a mano en una página desde la vista previa
+        fijas = _fijas()
+        q += (" AND (substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ?"
+              + (f" OR id IN ({','.join('?' * len(fijas))})" if fijas else "") + ")")
+        args = (dia, *fijas)
     with _conn() as c:
         return c.execute(q, args).fetchall()
+
+
+def _fijas() -> list:
+    try:
+        d = json.loads((DB_PATH.parent / "maqueta.json").read_text(encoding="utf-8"))
+        return [int(k) for k in d.get("fijas", {})]
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def pendientes_de_otros_dias() -> int:
