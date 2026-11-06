@@ -37,4 +37,6 @@ if __name__ == "__main__":
 
     app = App()
     app.report_callback_exception = _log_exc
+    if "--revisar" in sys.argv:          # arranca y revisa Facebook de inmediato (como pulsar ▶ Revisar ahora)
+        app.after(2500, app.check_now)
     app.mainloop()
