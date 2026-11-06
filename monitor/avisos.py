@@ -31,14 +31,14 @@ DEFAULT = {
     "borrados": [],           # avisos de fábrica que el usuario eliminó (no se vuelven a agregar)
     "avisos": [
         {"id": "anunciate", "nombre": "Anúnciate aquí (espacios grandes)", "tipo": "texto", "auto": True,
-         "icono": "megafono", "titulo": "ANÚNCIATE AQUÍ",
+         "icono": "megafono", "titulo": "¡VENDE MÁS! ANÚNCIATE AQUÍ",
          "mensaje": "Este espacio puede ser tuyo. Publicidad, avisos y denuncias al WhatsApp",
          "telefono": WHATSAPP, "imagen": "", "grande": True},
         {"id": "reporta", "nombre": "Reporta tu noticia", "tipo": "texto", "auto": True, "icono": "telefono",
          "titulo": "¿TIENES UNA NOTICIA?", "mensaje": "Repórtala o envíanos tu foto o video al WhatsApp",
          "telefono": WHATSAPP, "imagen": ""},
         {"id": "anuncia", "nombre": "Anuncia con nosotros", "tipo": "texto", "auto": True, "icono": "megafono",
-         "titulo": "ANUNCIA CON NOSOTROS", "mensaje": "Llega a miles de lectores de Puno y la región. WhatsApp",
+         "titulo": "¡VENDE MÁS! ANÚNCIATE AQUÍ", "mensaje": "Llega a miles de lectores de Puno y la región. WhatsApp",
          "telefono": WHATSAPP, "imagen": ""},
         {"id": "denuncia", "nombre": "Denuncia", "tipo": "texto", "auto": True, "icono": "chat",
          "titulo": "¡DENÚNCIALO!", "mensaje": "¿Abusos, cobros indebidos u obras abandonadas? Escríbenos al WhatsApp",
@@ -216,6 +216,7 @@ def dibujar(c, a: dict, rect, D: dict):
     # aviso de texto: recuadro del color principal, título, mensaje y número grande
     a = dict(a)
     a["mensaje"], a["telefono"] = contacto(a)
+    a["titulo"] = re.sub(r"([!?])\s+(?=\S)", "\\1\n", (a.get("titulo") or "").strip())   # "¡VENDE MÁS!" en su línea
     c.saveState()
     c.setFillColor(principal)
     c.roundRect(x0, y0, w, h, 6, stroke=0, fill=1)
