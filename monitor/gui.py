@@ -1416,7 +1416,10 @@ class App(tk.Tk):
             return
         n = len(storage.grupos_para_pdf())
         if not n:
-            messagebox.showinfo("Periódico", "No hay noticias marcadas (☑) pendientes de publicar.")
+            viejas = storage.pendientes_de_otros_dias()
+            messagebox.showinfo("Periódico", "No hay noticias de hoy marcadas (☑) pendientes de publicar."
+                                + (f"\n\n{viejas} noticia(s) de días anteriores no entran: el boletín solo lleva "
+                                   "lo del día. Pulsa ▶ Revisar ahora para traer las noticias de hoy." if viejas else ""))
             return
         if not previa and not messagebox.askyesno(
                 "Generar periódico",
@@ -1457,7 +1460,8 @@ class App(tk.Tk):
                                     f"¿Abrir el último publicado (N° {ult['n']}) para verlo o corregirlo?"):
                 self._vista_previa(ult["n"])
             elif not ult:
-                self._aviso("No hay noticias marcadas (☑) pendientes de publicar.", "warn")
+                self._aviso("No hay noticias de hoy marcadas (☑) pendientes de publicar "
+                            "(el boletín solo lleva lo del día).", "warn")
             return
         v = self._ventana_previa
         if v is not None and v.winfo_exists():

@@ -307,11 +307,19 @@ class InicioTab(ttk.Frame):
             pendientes = c.execute("SELECT COUNT(*) FROM grupos WHERE estado_pdf IN ('nuevo','actualizacion') "
                                    "AND nota_json IS NOT NULL").fetchone()[0]
         van = len(storage.grupos_para_pdf())
+        viejas = storage.pendientes_de_otros_dias()
         if pendientes:
-            p2.estado.configure(text=f"{van} de {pendientes} noticias van al periódico",
+            p2.estado.configure(text=f"{van} de {pendientes} noticias van al periódico (solo las de hoy)",
                                 fg=OK if van else MAL)
-            p2.detalle.configure(text="Las que no quieras publicar, márcalas ☐ No va." if van
-                                 else "Todas están marcadas ☐ No va: marca al menos una.")
+            if van:
+                det = "Las que no quieras publicar, márcalas ☐ No va."
+            elif viejas:
+                det = "Aún no hay noticias de hoy: pulsa ▶ Revisar ahora (paso 1) para traerlas."
+            else:
+                det = "Todas están marcadas ☐ No va: marca al menos una."
+            if viejas:
+                det += f"  ({viejas} de días anteriores no entran.)"
+            p2.detalle.configure(text=det)
         else:
             p2.estado.configure(text="No hay noticias nuevas todavía", fg=MUTED)
             p2.detalle.configure(text="Llegan en cada revisión (paso 1).")

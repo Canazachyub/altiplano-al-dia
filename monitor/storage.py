@@ -270,12 +270,24 @@ def grupos_descartados():
         return c.execute("SELECT id FROM grupos WHERE estado_pdf='descartado'").fetchall()
 
 
-def grupos_para_pdf():
+def grupos_para_pdf(dia: str | None = None):
+    """Noticias que van al próximo boletín: solo las del día (fecha del hecho = hoy, hora local).
+    dia: 'AAAA-MM-DD' para otro día; '' = sin filtro de fecha."""
+    if dia is None:
+        dia = datetime.now().strftime("%Y-%m-%d")
+    q = ("SELECT * FROM grupos WHERE estado_pdf IN ('nuevo','actualizacion') AND nota_json IS NOT NULL"
+         " AND COALESCE(en_periodico, 1)=1")
+    args = ()
+    if dia:
+        q += " AND substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ?"
+        args = (dia,)
     with _conn() as c:
-        return c.execute(
-            "SELECT * FROM grupos WHERE estado_pdf IN ('nuevo','actualizacion') AND nota_json IS NOT NULL"
-            " AND COALESCE(en_periodico, 1)=1"
-        ).fetchall()
+        return c.execute(q, args).fetchall()
+
+
+def pendientes_de_otros_dias() -> int:
+    """Noticias sin publicar de días anteriores (no entran al boletín de hoy)."""
+    return len(grupos_para_pdf("")) - len(grupos_para_pdf())
 
 
 def registrar_consolidado(path, desde, hasta, gids) -> int:
