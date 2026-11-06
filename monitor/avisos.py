@@ -124,7 +124,7 @@ class Asignador:
         self.rotacion = [a for a in listos if not a.get("grande")] or self.grandes
         self.i = self.j = 0
 
-    def para(self, clave: str, alto: float, ancho: float | None = None):
+    def para(self, clave: str, alto: float, ancho: float | None = None, grande_ok: bool = True):
         """ancho (opcional): en un espacio ancho (zona principal) entra un aviso apaisado más bajo."""
         if clave in self.d["colocados"]:
             a = por_id(self.d, self.d["colocados"][clave])
@@ -132,7 +132,7 @@ class Asignador:
         minimo = 60 if (ancho or 0) >= 300 else 90
         if not self.d.get("auto") or not self.rotacion or alto < minimo:
             return None, False
-        if self.grandes and alto >= GRANDE:      # espacio grande: "Anúnciate aquí" con el WhatsApp
+        if self.grandes and alto >= GRANDE and grande_ok:      # espacio grande: "Anúnciate aquí" con el WhatsApp
             a = self.grandes[self.j % len(self.grandes)]
             self.j += 1
             return a, False

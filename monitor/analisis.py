@@ -379,6 +379,14 @@ def ciclo_fase2(cfg: dict, emit=lambda *a: None, forzar_pdf: bool = False, cance
                 except Exception as e:  # noqa: BLE001
                     api_log.exception("paso_editorial")
                     emit("error", f"Revisión editorial: {e}")
+            if not (cancelar and cancelar()) and cfg.get("formato", "tabloide") == "tabloide":
+                # cada nota con el largo de su espacio en la plantilla del día
+                try:
+                    from .redaccion import paso_medida
+                    out["medida"] = paso_medida(cfg, emit, cancelar)
+                except Exception as e:  # noqa: BLE001
+                    api_log.exception("paso_medida")
+                    emit("error", f"Ajuste de largo: {e}")
             if not (cancelar and cancelar()):
                 # fotos: quitar logos y textos sobrepuestos (Qwen local, en su propio hilo: no frena el periódico)
                 try:

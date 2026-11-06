@@ -134,6 +134,8 @@ def seccion_de(a) -> str | None:
     s = (a["nota"].get("SECCION") or "").strip().upper().replace("POLITICA", "POLÍTICA")
     if s in NOTICIAS:
         return s
+    if s in ("NACIONAL", "INTERNACIONAL"):      # sin página propia: llena huecos libres
+        return None
     tema = (a.get("tema") or "").lower()
     if tema.startswith("seguridad"):
         return "POLICIAL"
@@ -413,7 +415,10 @@ def _pagina_noticias(c, pagina, st, asignador, anclas, D, numero, ahora):
 def _hueco_libre(c, h, pagina, asignador, D):
     """Hueco sin nota: un aviso (y queda marcado en la vista previa para añadir una nota ahí)."""
     from . import portada
-    av, _ = asignador.para(h.clave, h.h, h.w)
+    # una sola "Anúnciate aquí" por página; los demás huecos rotan entre los otros avisos
+    av, _ = asignador.para(h.clave, h.h, h.w, grande_ok=not pagina.get("_grande"))
+    if av and av.get("grande"):
+        pagina["_grande"] = True
     if av:
         avisos.dibujar(c, av, (h.x0, h.bot, h.x1, h.top), D)
         portada.ZONAS.append({"pag": pagina["n"], "gid": None, "lugar": "aviso", "clave": h.clave,

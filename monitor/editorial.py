@@ -23,6 +23,7 @@ from .config import DB_PATH, nombre_medio
 log = logging.getLogger("monitor")
 ESTADO_PATH = DB_PATH.parent / "editorial.json"
 MAX_UNIR = 6          # notas como máximo en una fusión
+SECCIONES = ("LOCAL", "DISTRITAL", "PROVINCIAL", "POLÍTICA", "POLICIAL", "DEPORTES", "NACIONAL", "INTERNACIONAL")
 
 SYS_EDITOR = """Eres el jefe de redacción de "Altiplano al Día", diario de Puno (Perú). Recibes las
 noticias candidatas del próximo periódico (id, ámbito, tema, titular, bajada, inicio del texto,
@@ -63,10 +64,20 @@ cuántos medios la cubrieron y fecha). Tu trabajo:
    Suma 1 si la cubrieron 3 o más medios (es tendencia) y resta 1 a lo internacional o
    nacional sin efecto en Puno. Nunca más de 10 ni menos de 1.
    "motivo": de 3 a 8 palabras.
+3. "seccion" para CADA id: la página del diario donde va (diario de Puno, Perú):
+   LOCAL: ciudades de Puno y Juliaca (servicios, obras, salud, educación, vecinos).
+   DISTRITAL: distritos y centros poblados (municipios distritales, comunidades).
+   PROVINCIAL: las demás provincias de la región Puno (Azángaro, El Collao-Ilave, Chucuito,
+     Melgar-Ayaviri, Sandia, Carabaya, Huancané, Moho, Yunguyo, Lampa, Putina…).
+   POLÍTICA: elecciones, autoridades y su gestión política, Congreso, gobierno, partidos.
+   POLICIAL: crímenes, detenciones, juicios y condenas, accidentes, desaparecidos, rescates.
+   DEPORTES: deporte de cualquier lugar.
+   NACIONAL o INTERNACIONAL: lo que pasa fuera de la región y no es político, policial ni
+     deportivo (economía nacional, espectáculos, ciencia).
 
 Responde SOLO JSON:
 {"fusiones":[{"ids":[12,15,19],"principal":15,"tipo":"mismo_hecho","evento":"muerte del obispo de Puno"}],
- "impacto":[{"id":12,"impacto":7,"motivo":"…"}]}"""
+ "impacto":[{"id":12,"impacto":7,"motivo":"…","seccion":"POLICIAL"}]}"""
 
 SYS_UNIR = ESTILO + """
 
@@ -177,7 +188,8 @@ def evaluar(cfg, grupos, cancelar=None) -> dict:
         except (TypeError, ValueError, AttributeError):
             continue
         if gid in validos:
-            imp[gid] = (max(1, min(10, val)), str(x.get("motivo") or "")[:80])
+            sec = str(x.get("seccion") or "").strip().upper().replace("POLITICA", "POLÍTICA")
+            imp[gid] = (max(1, min(10, val)), str(x.get("motivo") or "")[:80], sec)
     fus, usados = [], set()
     for f in r.get("fusiones") or []:
         try:
@@ -259,6 +271,9 @@ def unir(cfg, ids, principal, cancelar=None, tipo="mismo_hecho") -> bool:
                           for d in nueva.get("DATOS") or []] or datos_previos
     nueva["IMPACTO"] = max(impacto(_nota(g)) for g in orden) or previa.get("IMPACTO")
     nueva["_impacto_motivo"] = previa.get("_impacto_motivo", "")
+    for k in ("SECCION", "_SECCION_MANUAL"):
+        if previa.get(k):
+            nueva[k] = previa[k]
     nueva["_origen"] = "claude:unida"
     nueva["_fusion"] = {"ids": sorted(grupos), "posts": {str(k): v for k, v in posts_por_grupo.items()},
                         "nota_antes": previa, "fecha": storage.now_iso()}
@@ -342,9 +357,11 @@ def paso_editorial(cfg, emit=lambda *a: None, cancelar=None, forzar=False) -> di
         for g in grupos:
             if g["id"] not in r["impacto"]:
                 continue
-            val, motivo = r["impacto"][g["id"]]
+            val, motivo, sec = r["impacto"][g["id"]]
             n = _nota(g)
             n["IMPACTO"], n["_impacto_motivo"] = val, motivo
+            if sec in SECCIONES and not n.get("_SECCION_MANUAL"):
+                n["SECCION"] = sec
             c.execute("UPDATE grupos SET nota_json=? WHERE id=?", (json.dumps(n, ensure_ascii=False), g["id"]))
             out["evaluadas"] += 1
     # fusiones
