@@ -754,12 +754,29 @@ def _paginar(arts, st, fijas=None):
                     break
                 if not puesto:
                     break
+    # página sin nada en la columna lateral (suele ser la última): las notas pasan a las 4 columnas
+    # para no dejar una franja vacía a un costado
+    for pg in paginas:
+        if pg.portada or pg.full or pg.lat or not pg.main or any(a.get("_partida") for a, _, _ in pg.main):
+            continue
+        ancho = W - 2 * M
+        nuevos = []
+        for i, (a, _, _) in enumerate(pg.main):
+            h, ops = lay(a, ancho, 4, "lead" if i == 0 else "sec", None if i == 0 else pg.main[0][0]["ambito"])
+            nuevos.append((a, h, ops))
+        if sum(h for _, h, _ in nuevos) + GAP * (len(nuevos) - 1) <= pg.alto:
+            pg.main, pg.x_main, pg.w_main, pg.ancho_completo = nuevos, M, ancho, True
     # aprovechar el espacio sobrante: agrandar la foto de la última nota de cada pila
     for pg in paginas:
-        for pila, ancho, ncols, libre in ((pg.main, pg.w_main, 3, pg.libre_main), (pg.lat, CW, 1, pg.libre_lat)):
+        cols_main = 4 if getattr(pg, "ancho_completo", False) else 3
+        for pila, ancho, ncols, libre in ((pg.main, pg.w_main, cols_main, pg.libre_main),
+                                          (pg.lat, CW, 1, pg.libre_lat)):
             if pila:
                 a, h, ops = pila[-1]
                 extra = libre() + GAP
+                if cols_main == 4 and pila is pg.main:
+                    extra = min(extra, 120)     # a todo el ancho una foto gigante no luce: el resto lo llenan
+                    #                             los datos clave y "También en esta edición"
                 if extra > 30 and a["img"] and not a.get("_partida"):
                     tipo = "side" if ncols == 1 else ("lead" if len(pila) == 1 else "sec")
                     h2, ops2 = _medir(a, ancho, ncols, tipo, st, h + extra, seccion=pg.seccion())
@@ -1061,6 +1078,70 @@ def _ordenar(arts, cfg):
     return sorted(arts, key=lambda a: (amb.get(a["ambito"], 99), peso(a)))
 
 
+def _tambien(c, otros, paginas_de, x, ytop, ancho, alto, st):
+    """Relleno de un espacio libre sin aviso: recuadro "También en esta edición" con las noticias de más
+    impacto de otras páginas (foto, titular y página, con enlace). Devuelve el alto usado (0 = nada)."""
+    from .editorial import impacto
+    if not otros or alto < 70:
+        return 0.0
+    otros = sorted(otros, key=lambda a: -(impacto(a) * 120 + min(a["n_medios"], 4) * 70 + (150 if a["img"] else 0)))
+    cab = 20
+    ncol = 2 if ancho >= 300 else 1
+    colw = (ancho - (ncol - 1) * GUT) / ncol
+    fila_min = 44
+    filas = max(1, int((alto - cab - 6) // fila_min))
+    items = otros[:filas * ncol]
+    filas = -(-len(items) // ncol)
+    fila_h = min(110.0, (alto - cab - 6) / filas)          # las filas crecen para ocupar el hueco
+    usado = cab + 6 + filas * fila_h
+    y0 = ytop - usado
+    c.saveState()
+    c.setFillColor(colors.HexColor("#EEF3FB"))
+    c.rect(x, y0, ancho, usado, stroke=0, fill=1)
+    c.setFillColor(AZUL)
+    c.rect(x, ytop - cab, ancho, cab, stroke=0, fill=1)
+    c.setFillColor(AMARILLO)
+    c.rect(x, ytop - cab, 5, cab, stroke=0, fill=1)
+    c.setFillColor(colors.white)
+    c.setFont("Narrow-B", 10)
+    c.drawString(x + 11, ytop - cab + 6.5, "TAMBIÉN EN ESTA EDICIÓN")
+    c.restoreState()
+    for i, a in enumerate(items):
+        col, fila = i % ncol, i // ncol
+        cx = x + col * (colw + GUT) + 6
+        cy_top = ytop - cab - 6 - fila * fila_h
+        h = fila_h - 6
+        tx, tw = cx, colw - 12
+        if a["img"] and h >= 34:
+            fw = min(h * 1.35, tw * 0.38)
+            try:
+                c.drawImage(_recorte(a["img"], int(fw), int(h)), cx, cy_top - h, fw, h)
+                tx, tw = cx + fw + 7, tw - fw - 7
+            except Exception:  # noqa: BLE001
+                pass
+        pag = paginas_de.get(a["gid"], "")
+        size = 10.5 if h >= 60 else 9
+        estilo = ParagraphStyle("tb", parent=st["idx"], fontName="Slab", fontSize=size, leading=size * 1.12,
+                                textColor=NEGRO)
+        lineas = max(1, int((h - 11) // (size * 1.12)))
+        t = a["titular"]
+        p = Paragraph(_x(t), estilo)
+        while p.wrap(tw, 500)[1] > lineas * size * 1.12 + 0.5 and len(t) > 20:
+            t = t[:len(t) - 8].rsplit(" ", 1)[0] + "…"
+            p = Paragraph(_x(t), estilo)
+        _, ph = p.wrap(tw, 500)
+        p.drawOn(c, tx, cy_top - ph)
+        c.setFont("Narrow-B", 8)
+        c.setFillColor(AZUL)
+        c.drawString(tx, cy_top - h + 1, f"Pág. {pag} ›")
+        c.linkRect("", f"g{a['gid']}", (cx, cy_top - h, cx + colw - 12, cy_top), relative=0, thickness=0)
+        if fila < filas - 1 and i + ncol < len(items):
+            c.setStrokeColor(colors.white)
+            c.setLineWidth(0.8)
+            c.line(cx, cy_top - fila_h + 3, cx + colw - 12, cy_top - fila_h + 3)
+    return usado
+
+
 def _hueco(pag, rect, clave=""):
     from . import portada
     if portada.ZONAS is not None:
@@ -1124,6 +1205,8 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
                 c.addOutlineEntry(_corto(a["titular"]), f"g{a['gid']}", level=1)
             continue
         for pila, x, ancho in ((pg.main, pg.x_main, pg.w_main), (pg.lat, pg.x_lat, CW)):
+            if pila is pg.lat and getattr(pg, "ancho_completo", False):
+                continue                       # las notas ya ocupan las 4 columnas
             y = pg.top
             for i, (a, h, ops) in enumerate(pila):
                 _dibujar(c, ops, x, y, anclas)
@@ -1152,7 +1235,7 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
                 if y_hueco - BOTTOM > 70:
                     clave = f"{pg.n}:{'lat' if pila is pg.lat else 'main'}"
                     alto_h = y_hueco - BOTTOM - 4
-                    av, _ = asignador.para(clave, alto_h, ancho)
+                    av, fijo = asignador.para(clave, alto_h, ancho)
                     if av:
                         # el aviso va abajo; si sobra mucho espacio arriba, queda libre para una noticia
                         alto_av = min(alto_h, 230 if pila is pg.lat else 170)
@@ -1161,8 +1244,14 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
                         _zona_aviso(pg.n, rect_av, clave, av["id"])
                         if alto_h - alto_av - GAP > 70:
                             _hueco(pg.n, (x, BOTTOM + 4 + alto_av + GAP, x + ancho, y_hueco), clave)
-                    else:
+                    elif fijo:                  # dejado vacío a propósito en la vista previa
                         _hueco(pg.n, (x, BOTTOM + 4, x + ancho, y_hueco), clave)
+                    else:
+                        # sin aviso listo: "También en esta edición" con otras noticias del boletín
+                        otros = [b for b in arts if paginas_de.get(b["gid"]) not in (None, pg.n)]
+                        alto_t = _tambien(c, otros, paginas_de, x, y_hueco, ancho, alto_h, st)
+                        if alto_h - alto_t - GAP > 70:
+                            _hueco(pg.n, (x, BOTTOM + 4, x + ancho, y_hueco - alto_t - GAP), clave)
         if pg.lat and not pg.portada:
             xr = pg.x_main + pg.w_main + GUT / 2 if not pg.lateral_izq else pg.x_main - GUT / 2
             _filete_v(c, xr, BOTTOM, pg.top)
