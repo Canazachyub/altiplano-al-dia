@@ -467,6 +467,11 @@ class App(tk.Tk):
         ttk.Button(eb, text="☑ Incluir / ☐ Excluir", command=self._toggle_incluir).pack(side="left", padx=4)
         ttk.Button(eb, text="Incluir todas", command=lambda: self._incluir_todas(True)).pack(side="left")
         ttk.Button(eb, text="Excluir todas", command=lambda: self._incluir_todas(False)).pack(side="left", padx=4)
+        b_ed = ttk.Button(eb, text="🧠 Unir y ordenar", command=self._revision_editorial)
+        b_ed.pack(side="left")
+        Tip(b_ed, "Claude revisa las noticias que van: une en una sola nota completa las que cuentan el "
+                  "mismo hecho y ordena todo por impacto (crimen, corrupción, tragedias van primero). "
+                  "Se hace solo al agrupar; usa este botón si editaste o agregaste noticias a mano.")
         ttk.Button(eb, text="Abrir Excel", command=self._open_excel).pack(side="right")
         ttk.Button(eb, text="📂 Publicados", command=self._publicados).pack(side="right", padx=4)
         ttk.Button(eb, text="📰 Generar periódico", style="Accent.TButton",
@@ -869,6 +874,35 @@ class App(tk.Tk):
 
         threading.Thread(target=run, daemon=True).start()
 
+    def _revision_editorial(self):
+        """Paso editorial a pedido: unir notas del mismo hecho y ordenar por impacto (Claude)."""
+        if self.running or fase2_lock.locked():
+            self._aviso("Espera a que termine la operación en curso (franja amarilla).", "warn")
+            return
+        if not get_api_key("claude"):
+            self._aviso("Falta la API key de Claude (pestaña Configuración).", "warn")
+            return
+        cfg = self._cfg_actual()
+        self._set_busy(True, "Claude revisa el periódico: une repetidas y ordena por impacto…")
+        self.last_error = ""
+        detener.clear()
+
+        def run():
+            from .editorial import paso_editorial
+            try:
+                with fase2_lock:
+                    r = paso_editorial(cfg, self._emit, cancelar=detener.is_set, forzar=True)
+                self.q.put(("aviso_ok", f"Revisión editorial lista: {r.get('unidas', 0)} notas repetidas "
+                                        f"unidas y {r.get('evaluadas', 0)} noticias ordenadas por impacto."))
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger("monitor").exception("Revisión editorial")
+                self.q.put(("error", f"Revisión editorial: {e}"))
+            finally:
+                self.q.put(("fase2_manual_fin", None))
+                self.q.put(("fase2_fin", None))
+
+        threading.Thread(target=run, daemon=True).start()
+
     def _login(self):
         if self.running or browser_lock.locked():
             messagebox.showwarning("Facebook", "Espera a que termine la revisión en curso "
@@ -974,6 +1008,8 @@ class App(tk.Tk):
             self._load_posts()
         elif ev == "detenido":
             self._aviso("Revisión detenida. Lo leído hasta ese momento quedó guardado.", "warn")
+        elif ev == "aviso_ok":
+            self._aviso(d, "ok", 7000)
         elif ev == "fase2_manual_fin":
             self._set_busy(False)
             if not self.last_error:

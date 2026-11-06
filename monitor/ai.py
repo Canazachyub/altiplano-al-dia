@@ -49,6 +49,13 @@ ESTRUCTURA (pirámide invertida, que enganche e informe):
   fuerte. Verbo en presente o pretérito ("Municipalidad de Puno inicia…", "Policía captura…").
   Sin signos de exclamación, sin preguntas, sin clickbait, sin mayúsculas sostenidas, sin
   punto final y sin "hoy", "ayer" ni "mañana" (el diario se lee después).
+  Que dé ganas de leer: empieza por lo que más le importa al lector (la víctima, el monto, la
+  consecuencia, quién pierde o gana), usa verbos fuertes y precisos (muere, captura, denuncia,
+  destituyen, paralizan, exigen, condenan, cierran) y cifras o nombres concretos
+  ("S/ 2,1 millones", "seis detenidos", "Juliaca"). Evita los titulares de trámite que no
+  dicen nada ("Realizan reunión…", "Se llevó a cabo…", "Autoridades se pronuncian…",
+  "Destacan importancia de…") y no empieces con el nombre largo de una institución si el
+  hecho es más fuerte.
 - BAJADA: 1 o 2 líneas que completan el titular con el segundo dato clave (dónde, cuánto,
   a quién afecta). No repite el titular.
 - CUERPO, en párrafos separados por \\n\\n:

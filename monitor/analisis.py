@@ -371,6 +371,14 @@ def ciclo_fase2(cfg: dict, emit=lambda *a: None, forzar_pdf: bool = False, cance
                 except Exception as e:  # noqa: BLE001
                     api_log.exception("generar_notas")
                     emit("error", f"Notas: {e}")
+            if not (cancelar and cancelar()):
+                # jefe de redacción: une las notas del mismo acontecimiento y ordena por impacto
+                try:
+                    from .editorial import paso_editorial
+                    out["editorial"] = paso_editorial(cfg, emit, cancelar)
+                except Exception as e:  # noqa: BLE001
+                    api_log.exception("paso_editorial")
+                    emit("error", f"Revisión editorial: {e}")
         else:
             emit("error", "Fase 2 omitida: falta la API key de Claude (pestaña Configuración).")
         try:

@@ -448,7 +448,27 @@ class VistaPrevia(tk.Toplevel):
         m.add_command(label="📄  Mover a la página…", command=lambda: self._mover_pagina(gid))
         if gid in consolidado.leer_fijas():
             m.add_command(label="↺  Dejar que se ubique sola", command=lambda: self._soltar(gid))
+        g = storage.get_grupo(gid)
+        try:
+            fusion = json.loads(g["nota_json"] or "{}").get("_fusion") if g else None
+        except (TypeError, ValueError):
+            fusion = None
+        if fusion and not self.edicion:
+            m.add_separator()
+            m.add_command(label=f"✂  Separar las {len(fusion.get('ids', []))} notas que se unieron",
+                          command=lambda: self._separar(gid))
         m.tk_popup(e.x_root, e.y_root)
+
+    def _separar(self, gid):
+        """Deshace una unión del paso editorial: cada noticia vuelve a salir por separado."""
+        from .editorial import deshacer_fusion
+        if not messagebox.askyesno("Separar notas", "Esta nota se armó uniendo varias noticias del mismo "
+                                   "hecho. ¿Volver a publicarlas por separado?", parent=self):
+            return
+        if deshacer_fusion(gid):
+            self.app._refresh_dashboard()
+            self.app._aviso("Notas separadas: vuelven a salir cada una por su lado.", "ok")
+            self.generar()
 
     # ------------------------------------------------------------------ qué noticias forman este periódico
     def _grupos(self):

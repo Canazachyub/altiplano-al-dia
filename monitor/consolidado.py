@@ -1053,8 +1053,10 @@ def _ficha(c, arts, paginas_de, numero, st):
 def _ordenar(arts, cfg):
     amb = {a: i for i, a in enumerate(cfg["ambitos"])}
 
-    def peso(a):
-        return -(a["n_medios"] * 300 + (150 if a["img"] else 0) + min(a["palabras"], 400))
+    from .editorial import impacto
+
+    def peso(a):      # dentro de cada sección, primero lo de mayor impacto (abre la página)
+        return -(impacto(a) * 120 + min(a["n_medios"], 4) * 70 + (150 if a["img"] else 0) + min(a["palabras"], 400) // 4)
 
     return sorted(arts, key=lambda a: (amb.get(a["ambito"], 99), peso(a)))
 

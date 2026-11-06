@@ -83,7 +83,11 @@ def calidad_foto(ruta, ancho_pt) -> tuple[int, int, bool]:
 
 
 def _peso(a):
-    return a["n_medios"] * 300 + min(a["palabras"], 400) + (100 if a["ambito"] in ("DISTRITAL", "LOCAL", "REGIONAL") else 0)
+    """Importancia para la portada: manda el impacto del paso editorial (crimen, corrupción,
+    tragedias…); luego que sea tendencia (varios medios), que sea de Puno y que tenga contenido."""
+    from .editorial import impacto
+    return (impacto(a) * 120 + min(a["n_medios"], 4) * 70 + min(a["palabras"], 400) // 4
+            + (60 if a["ambito"] in ("DISTRITAL", "LOCAL", "REGIONAL") else 0))
 
 
 def elegir(arts) -> dict:
@@ -96,7 +100,8 @@ def elegir(arts) -> dict:
         if gid in por_id and gid not in usados:
             out[lugar] = por_id[gid]
             usados.add(gid)
-    rank = sorted(arts, key=lambda a: (0 if a["img"] else 1, -_peso(a)))
+    # la foto pesa, pero una noticia de mucho impacto sin foto le gana a una menor con foto
+    rank = sorted(arts, key=lambda a: -(_peso(a) + (250 if a["img"] else 0)))
     libres = [a for a in rank if a["gid"] not in usados]
     for lugar, _ in LUGARES:
         if lugar not in out and libres:
@@ -109,7 +114,10 @@ SYS_PORTADA = """Eres el editor de portada de "Altiplano al Día", diario de Pun
 Para cada noticia escribe textos de portada, fieles a los hechos, sin inventar nada y SIN nombrar
 nunca al medio que difundió la información:
 - "portada": titular de portada de 3 a 7 palabras, directo y con fuerza (verbo en activo,
-  el dato más llamativo). Sin signos de exclamación ni sensacionalismo.
+  el dato más llamativo). Es lo que hace que alguien compre y lea el diario: empieza por la
+  víctima, la cifra o la consecuencia; verbos fuertes y precisos (muere, captura, denuncian,
+  paralizan, condenan, exigen); nada genérico ("Realizan…", "Destacan…", "Se pronuncian…").
+  Sin signos de exclamación, sin preguntas y sin exagerar los hechos.
 - "ante": antetítulo de 5 a 12 palabras que da contexto (quién o dónde).
 - "puntos": SOLO para la noticia marcada como principal, 2 frases de 10 a 18 palabras con los
   datos clave; para las demás, lista vacía.
