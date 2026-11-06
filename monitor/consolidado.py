@@ -1312,7 +1312,8 @@ def _generar(cfg, grupos, destino, registrar, numero, ahora):
     arts = _ordenar([_articulo(g, cfg) for g in grupos], cfg)
     numero = numero or storage.siguiente_consolidado()
     ahora = ahora or datetime.now()
-    paginas = _paginar(arts, st, leer_fijas())
+    tabloide = cfg.get("formato", "tabloide") == "tabloide"
+    paginas = None if tabloide else _paginar(arts, st, leer_fijas())
     if destino is None:
         CONSOLIDADOS_DIR.mkdir(parents=True, exist_ok=True)
         destino = CONSOLIDADOS_DIR / f"{ahora:%Y-%m-%d_%H%M}.pdf"
@@ -1321,16 +1322,26 @@ def _generar(cfg, grupos, destino, registrar, numero, ahora):
     from . import portada
     portada.ZONAS = []
     portada.AVISOS = []
+    publicadas = None
     try:
-        _render(destino, arts, paginas, numero, ahora, st, cfg)
+        if tabloide:
+            from . import maqueta
+            paginas_de = maqueta.render(destino, arts, numero, ahora, st, cfg, leer_fijas())
+            publicadas = set(paginas_de)          # las que no entraron quedan para la próxima edición
+            ancho, alto = maqueta.W, maqueta.H
+        else:
+            _render(destino, arts, paginas, numero, ahora, st, cfg)
+            ancho, alto = W, H
         # mapa de zonas para la vista previa interactiva (qué noticia hay en cada lugar de cada página)
-        mapa = {"ancho": W, "alto": H, "zonas": portada.ZONAS,
+        mapa = {"ancho": ancho, "alto": alto, "zonas": portada.ZONAS,
                 "avisos": list(portada.AVISOS),
                 "titulares": {str(a["gid"]): a["titular"] for a in arts}}
         Path(str(destino)).with_suffix(".json").write_text(json.dumps(mapa, ensure_ascii=False), encoding="utf-8")
     finally:
         portada.ZONAS = None
     if registrar:
+        if publicadas is not None:
+            grupos = [g for g in grupos if g["id"] in publicadas]
         fechas = [g["fecha_hecho"] for g in grupos if g["fecha_hecho"]]
         storage.registrar_consolidado(destino, min(fechas) if fechas else None,
                                       max(fechas) if fechas else None, [g["id"] for g in grupos])

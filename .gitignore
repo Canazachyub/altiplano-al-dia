@@ -14,3 +14,6 @@ noticias*.xlsx
 *.log
 config.json.bak
 config.json.tmp
+
+# PDFs de referencia de otro diario (no se publican)
+PERIDICO MAQUETA/
