@@ -63,10 +63,10 @@ def _leer() -> dict:
         return {}
 
 
-def _anotar(ruta: str, **datos) -> None:
+def _anotar(origen: str, **datos) -> None:
     with _indice_lock:
         d = _leer()
-        d[_clave(ruta)] = {**datos, "fecha": datetime.now().isoformat(timespec="seconds")}
+        d[_clave(origen)] = {**datos, "fecha": datetime.now().isoformat(timespec="seconds")}
         DIR.mkdir(parents=True, exist_ok=True)
         tmp = INDICE.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -82,8 +82,8 @@ def ruta_para(ruta: str | None) -> str | None:
     if not ruta:
         return ruta
     e = estado(ruta)
-    if e.get("estado") == "limpia" and e.get("ruta") and Path(e["ruta"]).exists():
-        return e["ruta"]
+    if e.get("estado") == "limpia" and e.get("limpia") and Path(e["limpia"]).exists():
+        return e["limpia"]
     return ruta
 
 
@@ -165,6 +165,10 @@ def _medidas(w, h, lado=1024):
     return max(256, round(w * f / 32) * 32), max(256, round(h * f / 32) * 32)
 
 
+def _destino(ruta: str) -> Path:
+    return DIR / (hashlib.sha1(_clave(ruta).encode()).hexdigest()[:16] + ".jpg")
+
+
 def limpiar(ruta: str, cancelar=None, semilla=None) -> str:
     """Borra los rótulos de una foto con Qwen Imagen Studio. Devuelve la ruta de la versión limpia."""
     im = Image.open(ruta).convert("RGB")
@@ -196,10 +200,33 @@ def limpiar(ruta: str, cancelar=None, semilla=None) -> str:
         raise RuntimeError(job.get("message") or "Qwen Imagen Studio no devolvió imagen")
     png = urllib.request.urlopen(STUDIO_URL + job["images"][0]["src"], timeout=60).read()
     DIR.mkdir(parents=True, exist_ok=True)
-    nombre = hashlib.sha1(_clave(ruta).encode()).hexdigest()[:16] + ".jpg"
-    destino = DIR / nombre
-    Image.open(io.BytesIO(png)).convert("RGB").save(destino, "JPEG", quality=92)
+    destino = _destino(ruta)
+    recortar_franjas(Image.open(io.BytesIO(png)).convert("RGB")).save(destino, "JPEG", quality=92)
     return str(destino)
+
+
+def recortar_franjas(im: Image.Image, umbral=7.0, minimo=0.55) -> Image.Image:
+    """Quita las franjas lisas que quedan en los bordes donde había un panel de texto (fondo gris o de un
+    solo color). Nunca recorta más del 45 % por lado."""
+    from PIL import ImageStat
+    g = im.convert("L")
+    w, h = g.size
+
+    def lisa(caja):
+        return ImageStat.Stat(g.crop(caja)).stddev[0] < umbral
+
+    paso = max(2, h // 100)
+    top, bot, izq, der = 0, h, 0, w
+    while bot - top > h * minimo and lisa((0, bot - paso, w, bot)):
+        bot -= paso
+    while bot - top > h * minimo and lisa((0, top, w, top + paso)):
+        top += paso
+    paso = max(2, w // 100)
+    while der - izq > w * minimo and lisa((der - paso, top, der, bot)):
+        der -= paso
+    while der - izq > w * minimo and lisa((izq, top, izq + paso, bot)):
+        izq += paso
+    return im if (top, bot, izq, der) == (0, h, 0, w) else im.crop((izq, top, der, bot))
 
 
 # ------------------------------------------------------------------ paso del boletín
@@ -233,7 +260,7 @@ def paso_limpieza(cfg, emit, cancelar=None, forzar=False) -> dict:
         r["omitido"] = "ya en curso"
         return r
     try:
-        fotos = [f for f in fotos_del_boletin() if forzar or not estado(f[1])]
+        fotos = [f for f in fotos_del_boletin() if forzar or estado(f[1]).get("estado") in (None, "error")]
         if not fotos:
             return r
         # 1) qué fotos traen rótulos (rápido)
@@ -263,8 +290,9 @@ def paso_limpieza(cfg, emit, cancelar=None, forzar=False) -> dict:
             emit("status", f"Limpiando fotos con Qwen ({i}/{len(sucias)}): se quitan logos y textos encima…")
             try:
                 t0 = time.time()
-                limpia = limpiar(ruta, cancelar)
-                _anotar(ruta, estado="limpia", ruta=limpia, gid=gid, segundos=round(time.time() - t0))
+                previa = _destino(ruta)            # ya limpiada antes (p. ej. se perdió el índice)
+                limpia = str(previa) if previa.exists() and not forzar else limpiar(ruta, cancelar)
+                _anotar(ruta, estado="limpia", limpia=limpia, gid=gid, segundos=round(time.time() - t0))
                 r["limpias"] += 1
             except Exception as e:  # noqa: BLE001
                 log.exception("Limpieza de foto %s", ruta)

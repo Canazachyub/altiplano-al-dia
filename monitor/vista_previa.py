@@ -507,7 +507,7 @@ class VistaPrevia(tk.Toplevel):
                     return
                 # "volver a limpiar" usa otra semilla: sale otra versión
                 limpia = fotos_limpias.limpiar(rehacer, semilla=None if forzar else random.randint(1, 2**30))
-                fotos_limpias._anotar(rehacer, estado="limpia", ruta=limpia, gid=gid)
+                fotos_limpias._anotar(rehacer, estado="limpia", limpia=limpia, gid=gid)
                 app.q.put(("aviso_ok", "Foto limpia lista. Vuelve a generar la vista previa para verla."))
             except Exception as e:  # noqa: BLE001
                 app.q.put(("error", f"Limpiar foto: {e}"))

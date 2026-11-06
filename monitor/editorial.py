@@ -34,10 +34,21 @@ cuántos medios la cubrieron y fecha). Tu trabajo:
    su misa y la elección de su sucesor; la visita del papa y su logística, pronósticos y cifras
    de asistentes; un crimen y la captura de sus autores; un motín y sus consecuencias en ese
    mismo penal.
-   NO fusiones noticias que solo comparten tema, institución o lugar: dos asesinatos distintos,
-   dos accidentes distintos o dos conflictos electorales de distritos distintos son notas
-   separadas. Si dudas, NO fusiones. Cada id puede estar en una sola fusión, de 2 a 6 ids.
+   OJO, el error más grave es publicar DOS VECES lo mismo. Fusiona también:
+   - "mismo_hecho": el MISMO suceso contado en varios reportes (del mismo medio o de varios),
+     aunque los detalles no coincidan del todo: primero "choque entre dos vehículos" y luego
+     "tres vehículos involucrados", un sector nombrado distinto (Ichu / Cusipata), cifras que
+     se actualizan. Mismo tipo de hecho + mismo día + misma zona o vía = mismo hecho.
+   - "conjunto": hechos DISTINTOS pero del mismo tipo, el mismo día y el mismo lugar, vía o
+     institución (dos accidentes en la carretera Puno–Ilave esta mañana; dos denuncias contra
+     la misma empresa de agua). Publicados por separado parecen repetidos: van en UNA nota.
+   NO fusiones notas que solo comparten tema general: un asesinato en Juliaca y otro en Lima,
+   accidentes en provincias o días distintos, elecciones de distritos distintos.
+   Revisa con especial atención los "pares_sospechosos" que te indico (mismo antetítulo o
+   titulares parecidos): fusiónalos salvo que sean claramente de lugares o días distintos.
+   Cada id puede estar en una sola fusión, de 2 a 6 ids.
    "principal": el id cuyo hecho es el más importante o el más reciente del grupo.
+   "tipo": "mismo_hecho" o "conjunto".
 2. "impacto" para CADA id (también los fusionados), de 1 a 10, pensando en un lector de Puno:
    9-10: muertes violentas, asesinatos, feminicidios, tragedias con víctimas, corrupción o
          malversación de autoridades, crimen organizado, hechos graves en Puno o la región.
@@ -54,7 +65,7 @@ cuántos medios la cubrieron y fecha). Tu trabajo:
    "motivo": de 3 a 8 palabras.
 
 Responde SOLO JSON:
-{"fusiones":[{"ids":[12,15,19],"principal":15,"evento":"muerte del obispo de Puno"}],
+{"fusiones":[{"ids":[12,15,19],"principal":15,"tipo":"mismo_hecho","evento":"muerte del obispo de Puno"}],
  "impacto":[{"id":12,"impacto":7,"motivo":"…"}]}"""
 
 SYS_UNIR = ESTILO + """
@@ -67,6 +78,11 @@ misma historia en curso. Escribe UNA sola nota completa y bien organizada que la
 - Si la nota queda de 5 párrafos o más, ordénala en bloques con 1 a 3 intertítulos ("## …").
 - TITULAR que resuma la historia completa, no solo una de sus partes: concreto, con el dato
   más fuerte, que invite a leer.
+- Si "tipo" es "mismo_hecho" y los reportes difieren en detalles (cuántos vehículos, el nombre
+  del sector, cifras), usa la versión más reciente y completa; si la diferencia importa, dilo
+  ("en un primer reporte se habló de…"). Es UN solo hecho: no lo cuentes dos veces.
+- Si "tipo" es "conjunto" son hechos distintos: el titular los agrupa ("Dos accidentes en la
+  vía Puno–Ilave dejan…") y el cuerpo cuenta cada uno por separado, sin mezclar sus datos.
 - No agregues nada que no esté en las notas recibidas.
 
 Responde SOLO JSON, sin texto adicional ni bloques de código:
@@ -113,14 +129,45 @@ def _ficha(g) -> dict:
     n = _nota(g)
     return {"id": g["id"], "ambito": g["ambito"], "tema": g["tema"], "medios": storage.n_medios(g),
             "fecha": (g["fecha_hecho"] or "")[:16], "titular": n.get("TITULAR") or g["titular"],
+            "antetitulo": n.get("ANTETITULO") or "", "lugar": n.get("LUGAR") or "",
             "bajada": (n.get("BAJADA") or "")[:240], "texto": (n.get("CUERPO") or "")[:420]}
+
+
+_VACIAS = set("de la el los las del en y a un una por con para que se al su sus lo es tras ante sobre "
+              "este esta entre sin más mas como ser".split())
+
+
+def _palabras(t):
+    import re
+    import unicodedata
+    t = unicodedata.normalize("NFKD", (t or "").lower())
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    return {w for w in re.findall(r"[a-z0-9]{3,}", t) if w not in _VACIAS}
+
+
+def pares_sospechosos(grupos) -> list:
+    """Pares de noticias que probablemente cuentan lo mismo (mismo antetítulo, o titular + inicio muy
+    parecidos el mismo día). Se le señalan a Claude para que no se le escapen."""
+    fichas = []
+    for g in grupos:
+        n = _nota(g)
+        fichas.append((g["id"], (n.get("ANTETITULO") or "").strip().lower(), (g["fecha_hecho"] or "")[:10],
+                       _palabras(f"{n.get('TITULAR', '')} {n.get('BAJADA', '')} {(n.get('CUERPO') or '')[:300]}")))
+    pares = []
+    for i, (a, ante_a, dia_a, pa) in enumerate(fichas):
+        for b, ante_b, dia_b, pb in fichas[i + 1:]:
+            parecido = len(pa & pb) / max(1, len(pa | pb))
+            if (ante_a and ante_a == ante_b) or (dia_a == dia_b and parecido >= 0.22):
+                pares.append([a, b])
+    return pares
 
 
 # ------------------------------------------------------------------ 1. evaluar
 def evaluar(cfg, grupos, cancelar=None) -> dict:
     """Una llamada a Claude: fusiones propuestas e impacto de cada noticia."""
     validos = {g["id"] for g in grupos}
-    user = json.dumps({"noticias": [_ficha(g) for g in grupos]}, ensure_ascii=False)
+    user = json.dumps({"noticias": [_ficha(g) for g in grupos], "pares_sospechosos": pares_sospechosos(grupos)},
+                      ensure_ascii=False)
     r = claude_json(cfg, SYS_EDITOR, user, f"editorial[{len(grupos)}]", 5000, esfuerzo="medium",
                     cancelar=cancelar)
     imp = {}
@@ -147,12 +194,13 @@ def evaluar(cfg, grupos, cancelar=None) -> dict:
         if principal not in ids:
             principal = max(ids, key=lambda i: imp.get(i, (0,))[0])
         usados.update(ids)
-        fus.append({"ids": ids, "principal": principal, "evento": str(f.get("evento") or "")[:120]})
+        tipo = "conjunto" if f.get("tipo") == "conjunto" else "mismo_hecho"
+        fus.append({"ids": ids, "principal": principal, "evento": str(f.get("evento") or "")[:120], "tipo": tipo})
     return {"impacto": imp, "fusiones": fus}
 
 
 # ------------------------------------------------------------------ 2. unir
-def unir(cfg, ids, principal, cancelar=None) -> bool:
+def unir(cfg, ids, principal, cancelar=None, tipo="mismo_hecho") -> bool:
     """Reescribe las notas `ids` como una sola en el grupo `principal`; las demás salen del periódico."""
     grupos = {g["id"]: g for g in (storage.get_grupo(i) for i in ids) if g is not None and g["nota_json"]}
     if principal not in grupos or len(grupos) < 2:
@@ -170,7 +218,7 @@ def unir(cfg, ids, principal, cancelar=None) -> bool:
         ps = storage.posts_de_grupo(gid)
         posts_por_grupo[gid] = [p["id"] for p in ps]
         medios_todos += [nombre_medio(p["pagina"], cfg) for p in ps] + [p["pagina"] for p in ps]
-    user = json.dumps({"temas_permitidos": cfg["temas"], "notas": notas}, ensure_ascii=False)
+    user = json.dumps({"tipo": tipo, "temas_permitidos": cfg["temas"], "notas": notas}, ensure_ascii=False)
     tarea = f"unir[{','.join(map(str, grupos))}]"
 
     def pedir(u, t):
@@ -308,7 +356,7 @@ def paso_editorial(cfg, emit=lambda *a: None, cancelar=None, forzar=False) -> di
             continue                       # el editor las separó a mano: se respeta
         emit("status", f"Claude: uniendo {len(ids)} notas sobre «{f['evento'] or 'el mismo hecho'}»…")
         try:
-            if unir(cfg, ids, f["principal"], cancelar):
+            if unir(cfg, ids, f["principal"], cancelar, f.get("tipo", "mismo_hecho")):
                 out["unidas"] += len(ids) - 1
                 emit("grupo", f["principal"])
         except Exception as e:  # noqa: BLE001
