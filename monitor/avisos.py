@@ -6,6 +6,7 @@ colocarse a mano en un espacio, o los avisos marcados como "auto" rellenan solos
 que queden libres (rotando entre ellos)."""
 import copy
 import json
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -70,11 +71,26 @@ def importar_imagen(ruta: str) -> str:
     return str(destino)
 
 
+CONTACTO_SIN_TEL = "Altiplano al Día"     # sin número: se invita a escribir a la página de Facebook
+
+
 def listo(a: dict) -> bool:
-    """Un aviso se puede imprimir si tiene lo mínimo (imagen, o teléfono si es de texto)."""
+    """Un aviso se puede imprimir si tiene lo mínimo (imagen, o título si es de texto: sin teléfono
+    sale con la invitación a escribir por Facebook)."""
     if a.get("tipo") == "imagen":
         return bool(a.get("imagen")) and Path(a["imagen"]).exists()
-    return bool((a.get("titulo") or "").strip() and (a.get("telefono") or "").strip())
+    return bool((a.get("titulo") or "").strip())
+
+
+def contacto(a: dict) -> tuple[str, str]:
+    """(mensaje, línea grande de contacto). Sin teléfono no se inventa un número."""
+    msg = (a.get("mensaje") or "").strip()
+    tel = (a.get("telefono") or "").strip()
+    if tel:
+        return msg, tel
+    msg = re.sub(r"\s*(Ll[aá]manos al|Escr[ií]benos al|al WhatsApp|al)\s*:?$", "", msg, flags=re.I).rstrip(" .:")
+    return (msg + (". " if msg and not msg.endswith("?") else " ") + "Escríbenos por Facebook:").strip(), \
+        CONTACTO_SIN_TEL
 
 
 def por_id(d: dict, aid: str):
@@ -175,6 +191,8 @@ def dibujar(c, a: dict, rect, D: dict):
         c.drawCentredString(x0 + w / 2, y1 - 8, "PUBLICIDAD")
         return
     # aviso de texto: recuadro del color principal, título, mensaje y número grande
+    a = dict(a)
+    a["mensaje"], a["telefono"] = contacto(a)
     c.saveState()
     c.setFillColor(principal)
     c.roundRect(x0, y0, w, h, 6, stroke=0, fill=1)

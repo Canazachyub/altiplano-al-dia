@@ -1239,11 +1239,17 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
                     if av:
                         # el aviso va abajo; si sobra mucho espacio arriba, queda libre para una noticia
                         alto_av = min(alto_h, 230 if pila is pg.lat else 170)
+                        if alto_h - alto_av - GAP < 90:      # lo que sobraría arriba es poco: el aviso lo absorbe
+                            alto_av = alto_h
                         rect_av = (x, BOTTOM + 4, x + ancho, BOTTOM + 4 + alto_av)
                         avisos.dibujar(c, av, rect_av, D)
                         _zona_aviso(pg.n, rect_av, clave, av["id"])
-                        if alto_h - alto_av - GAP > 70:
-                            _hueco(pg.n, (x, BOTTOM + 4 + alto_av + GAP, x + ancho, y_hueco), clave)
+                        arriba = alto_h - alto_av - GAP
+                        if arriba > 0:
+                            otros = [b for b in arts if paginas_de.get(b["gid"]) not in (None, pg.n)]
+                            usado = _tambien(c, otros, paginas_de, x, y_hueco, ancho, arriba, st)
+                            if arriba - usado - GAP > 70:
+                                _hueco(pg.n, (x, BOTTOM + 4 + alto_av + GAP, x + ancho, y_hueco - usado - GAP), clave)
                     elif fijo:                  # dejado vacío a propósito en la vista previa
                         _hueco(pg.n, (x, BOTTOM + 4, x + ancho, y_hueco), clave)
                     else:
