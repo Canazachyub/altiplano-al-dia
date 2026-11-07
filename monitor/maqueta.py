@@ -448,13 +448,8 @@ def _ficha(c, arts, paginas_de, numero, st):
                     partes.append(f"<link href='{C.escape(l[etq])}' color='blue'>"
                                   f"{'Facebook' if etq == 'facebook' else 'Nota completa'}</link>")
             story.append(Paragraph(" · ".join(partes), st["v"]))
-    primera = True
     while story:
         c.setPageSize(A4)
-        if primera:
-            c.bookmarkPage("ficha")
-            c.addOutlineEntry("Ficha de verificación (interna)", "ficha", level=0)
-            primera = False
         f = Frame(20, 30, A4[0] - 40, A4[1] - 50, showBoundary=0)
         antes = len(story)
         f.addFromList(story, c)
@@ -508,7 +503,7 @@ def render(destino, arts, numero, ahora, st, cfg, fijas=None):
             _pagina_noticias(c, p, st, asignador, anclas, D, numero, ahora)
         else:
             servicio.dibujar(c, p["tipo"], area, k, arts=arts, rnd=rnd, numero=numero, ahora=ahora)
-    c.showPage()
-    _ficha(c, arts, paginas_de, numero, st)
     c.save()
+    from reportlab.lib.pagesizes import A4
+    C.guardar_ficha(destino, lambda cf: _ficha(cf, arts, paginas_de, numero, st), A4, numero)
     return paginas_de

@@ -33,7 +33,7 @@ from .config import BASE_DIR, get_github_token
 
 STAGE = BASE_DIR / "data" / "web"
 # carpetas que administra el maquetador (lo demás del sitio no se toca)
-GESTIONADAS = ("data/noticias.json", "data/boletines.json", "img/noticias/", "boletines/",
+GESTIONADAS = ("data/noticias.json", "data/boletines.json", "img/noticias/", "img/compartir/", "boletines/",
                "rss.xml", "sitemap.xml", "robots.txt")
 MAX_BOLETINES = 30
 FOTO_MAX = 1280
@@ -84,6 +84,25 @@ def _foto(origen: str, gid: int) -> str | None:
     return rel
 
 
+def _compartir(origen: str | None, tema: str, titular: str, gid: int) -> str | None:
+    """Tarjeta de 1200x630 con la foto, la seccion y el titular para Facebook/WhatsApp (og:image)."""
+    if not origen:
+        return None
+    from .tarjeta_web import tarjeta
+    hecha = tarjeta(Path(origen), (tema or "").split("/")[0], titular, gid)
+    if not hecha:
+        return None
+    rel = f"img/compartir/n{gid}.jpg"
+    (STAGE / rel).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(hecha, STAGE / rel)
+    return rel
+
+
+def _impacto(nota) -> int:
+    from .editorial import impacto
+    return impacto(nota)
+
+
 def _nota(g, cfg, usados: set) -> dict | None:
     from .consolidado import _articulo, _plano
     try:
@@ -115,9 +134,12 @@ def _nota(g, cfg, usados: set) -> dict | None:
         "tema": g["tema"] or "Otros", "seccion": TEMAS.get(g["tema"] or "", "otros"),
         "ambito": g["ambito"] or "REGIONAL", "fecha": g["fecha_hecho"] or g["actualizado"],
         "imagen": _foto(art["img"], g["id"]) if art["img"] else None,
-        "pie": art["pie"] or "", "credito": credito,
-        "medios": [credito] if credito else [], "fuentes": 1, "enlaces": [],
+        # En la web no se cita a otros medios: el pie de la foto es el titular de la nota.
+        "pie": titular, "credito": "",
+        "medios": [], "fuentes": 1, "enlaces": [],
         "boletin": edicion, "edicion": edicion,
+        "impacto": _impacto(nota), "fijada": storage.web_fijada(g),
+        "imagen_compartir": _compartir(art["img"], g["tema"], titular, g["id"]),
     }
 
 

@@ -229,6 +229,99 @@ def recortar_franjas(im: Image.Image, umbral=7.0, minimo=0.55) -> Image.Image:
     return im if (top, bot, izq, der) == (0, h, 0, w) else im.crop((izq, top, der, bot))
 
 
+# ------------------------------------------------------------------ elegir la mejor foto
+def candidatas(g, nota=None) -> list[str]:
+    """Fotos válidas (sin repetir) de todas las publicaciones de la nota."""
+    from . import storage
+    vistas, out = set(), []
+    for p in storage.posts_de_grupo(g["id"]):
+        ruta = p["imagen"] if "imagen" in p.keys() else None
+        if not ruta or _clave(ruta) in vistas:
+            continue
+        vistas.add(_clave(ruta))
+        try:
+            with Image.open(ruta) as im:
+                im.verify()
+            out.append(ruta)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+def _tiene_rotulos_cache(ruta: str) -> bool | None:
+    e = estado(ruta)
+    if e.get("estado") in ("sin_rotulos",):
+        return False
+    if e.get("estado") == "limpia" or e.get("rotulos") is True:
+        return True
+    t = tiene_rotulos(ruta)
+    if t is False:
+        _anotar(ruta, estado="sin_rotulos")
+    elif t is True:
+        _anotar(ruta, rotulos=True)        # sin «estado»: la limpieza la sigue tomando como pendiente
+    return t
+
+
+def elegir_mejor(g, emit=None) -> str | None:
+    """Entre las fotos de todos los medios de la nota, guarda en _IMAGEN_IA la mejor: primero las que NO
+    traen logos, marcas de agua, titulares ni textos de edición encima (Qwen2.5-VL); a igualdad, la de
+    mayor resolución. No toca las notas con foto elegida a mano (_IMAGEN) o marcadas sin foto."""
+    from . import storage
+    try:
+        nota = json.loads(g["nota_json"] or "{}")
+    except (TypeError, ValueError):
+        return None
+    if nota.get("_IMAGEN") or nota.get("_SIN_FOTO"):
+        return None
+    cands = candidatas(g, nota)
+    if len(cands) < 2:
+        return None
+    puntos = []
+    for ruta in cands:
+        t = _tiene_rotulos_cache(ruta)
+        if t is None:                      # sin Ollama no se puede elegir: se deja como está
+            return None
+        with Image.open(ruta) as im:
+            area = im.size[0] * im.size[1]
+        puntos.append((1 if t else 0, -area, ruta))
+    mejor = min(puntos)[2]
+    if nota.get("_IMAGEN_IA") != mejor:
+        nota["_IMAGEN_IA"] = mejor
+        with storage._conn() as c:
+            c.execute("UPDATE grupos SET nota_json=? WHERE id=?", (json.dumps(nota, ensure_ascii=False), g["id"]))
+        storage.marcar_web_editada([g["id"]])
+        log.info("Foto elegida por la IA para el grupo %s: %s", g["id"], mejor)
+    return mejor
+
+
+def _grupos_objetivo():
+    from . import storage
+    grupos = {g["id"]: g for g in storage.grupos_para_pdf()}
+    for g in storage.grupos_web():
+        if storage.estado_web(g) != "en_linea":
+            grupos.setdefault(g["id"], g)
+    return grupos
+
+
+def elegir_fotos(grupos, emit=lambda *a: None, cancelar=None) -> int:
+    """Corre elegir_mejor en las notas con varias fotos. Devuelve cuántas cambiaron de foto."""
+    n = 0
+    varias = [g for g in grupos if len(candidatas(g)) > 1]
+    for i, g in enumerate(varias, 1):
+        if cancelar and cancelar():
+            break
+        emit("status", f"Eligiendo la mejor foto entre los medios ({i}/{len(varias)})…")
+        antes = None
+        try:
+            antes = json.loads(g["nota_json"] or "{}").get("_IMAGEN_IA")
+        except (TypeError, ValueError):
+            pass
+        nueva = elegir_mejor(g, emit)
+        if nueva and nueva != antes:
+            n += 1
+    return n
+
+
 # ------------------------------------------------------------------ paso del boletín
 def fotos_del_boletin():
     """[(gid, ruta_original, impacto)] de las fotos que usaría el próximo boletín y de las noticias
@@ -237,10 +330,7 @@ def fotos_del_boletin():
     from .consolidado import imagen_original
     from .editorial import impacto
     out = []
-    grupos = {g["id"]: g for g in storage.grupos_para_pdf()}
-    for g in storage.grupos_web():
-        if storage.estado_web(g) != "en_linea":
-            grupos.setdefault(g["id"], g)
+    grupos = _grupos_objetivo()
     for g in grupos.values():
         try:
             nota = json.loads(g["nota_json"])
@@ -273,6 +363,8 @@ def paso_limpieza(cfg, emit, cancelar=None, forzar=False) -> dict:
         r["omitido"] = "ya en curso"
         return r
     try:
+        # 0) en las notas que juntan varios medios, la IA elige la foto sin logos ni textos encima
+        elegir_fotos(list(_grupos_objetivo().values()), emit, cancelar)
         fotos = [f for f in fotos_del_boletin() if forzar or estado(f[1]).get("estado") in (None, "error")]
         if not fotos:
             return r

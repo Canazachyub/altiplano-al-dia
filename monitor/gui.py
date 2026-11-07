@@ -503,6 +503,10 @@ class App(tk.Tk):
                  "«☐ No va» de la columna 🌐 Web.")
         ttk.Button(wb, text="Todas a la web", command=lambda: self._web_todas(True)).pack(side="left")
         ttk.Button(wb, text="Ninguna a la web", command=lambda: self._web_todas(False)).pack(side="left", padx=4)
+        b_fij = ttk.Button(wb, text="📌 Fijar en portada", command=self._fijar_web)
+        b_fij.pack(side="left")
+        Tip(b_fij, "Pone la noticia elegida arriba de la portada de la web (apertura), sin importar la hora. "
+                   "Vuelve a pulsar para soltarla. Sin fijar, la portada pone primero lo de más impacto del día.")
         self.b_subir = ttk.Button(wb, text="② 🌐 Subir a la web", style="Accent.TButton", command=self._subir_web)
         self.b_subir.pack(side="left", padx=(8, 0))
         self.lbl_web = ttk.Label(wb, text="", style="Muted.TLabel", cursor="hand2")
@@ -1410,7 +1414,7 @@ class App(tk.Tk):
                 tags.append("publicada")
             va = ("☑ Va" if va_si else "☐ No va") if pendiente else f"✔ N° {g['ultimo_pdf']}"
             self.gtree.insert("", "end", iid=str(g["id"]), tags=tags, values=(
-                va, _WEB_TXT[ew], "⚠" if menciona else ("◆" if multi else ""), _fecha_corta(g["fecha_hecho"]),
+                va, _WEB_TXT[ew] + (" 📌" if storage.web_fijada(g) else ""), "⚠" if menciona else ("◆" if multi else ""), _fecha_corta(g["fecha_hecho"]),
                 ("⚠ Nombra al medio · " if menciona else "") + (g["titular"] or ""), g["medios"],
                 g["n_fuentes"], g["tema"], pdf))
         if sel and self.gtree.exists(sel[0]):
@@ -1558,6 +1562,23 @@ class App(tk.Tk):
         storage.set_en_web(ids, valor)
         self._aviso(f"{len(ids)} noticia(s) {'marcadas para la web' if valor else 'quitadas de la web'}.",
                     "ok" if valor else "warn")
+        self._refresh_dashboard()
+
+    def _fijar_web(self):
+        sel = self.gtree.selection()
+        if not sel or not sel[0].isdigit():
+            self._aviso("Elige primero una noticia de la tabla.", "warn")
+            return
+        gid = int(sel[0])
+        g = next((x for x in storage.grupos_del_dia(None) if x["id"] == gid), None)
+        if g is None:
+            return
+        fijar = not storage.web_fijada(g)
+        if fijar and not storage.en_web(g):
+            storage.set_en_web([gid], True)
+        storage.set_web_fijada(gid, fijar)
+        self._aviso("📌 Fijada arriba de la portada. Pulsa ② Subir a la web." if fijar
+                    else "Ya no está fijada en la portada. Pulsa ② Subir a la web.", "ok")
         self._refresh_dashboard()
 
     def _pintar_estado_web(self):
@@ -1824,11 +1845,25 @@ class App(tk.Tk):
                 os.startfile(c["path"])  # noqa: S606
             else:
                 self._aviso("No se encuentra el PDF de ese periódico.", "warn")
+
+        def ficha():
+            from .consolidado import ruta_ficha
+            n = sel()
+            c = storage.get_consolidado(n) if n else None
+            f = ruta_ficha(c["path"]) if c and c["path"] else None
+            if f and f.exists():
+                os.startfile(str(f))  # noqa: S606
+            else:
+                self._aviso("Ese periódico no tiene ficha de verificación guardada.", "warn")
         tr.bind("<Double-1>", lambda e: ver())
         tr.bind("<Return>", lambda e: ver())
         w.bind("<Escape>", lambda e: w.destroy())
         ttk.Button(pie, text="👁 Ver y corregir  (Enter)", style="Accent.TButton", command=ver).pack(side="right")
         ttk.Button(pie, text="Abrir PDF", command=pdf).pack(side="right", padx=6)
+        b_fi = ttk.Button(pie, text="🔎 Ficha de verificación", command=ficha)
+        b_fi.pack(side="right")
+        Tip(b_fi, "Abre la ficha interna (de qué medios salió cada nota y sus enlaces). Va en un PDF aparte "
+                  "y no se publica ni se sube a la web.")
         ttk.Button(pie, text="Cerrar  (Esc)", command=w.destroy).pack(side="right")
         ttk.Label(pie, text="Doble clic para abrirlo en la vista previa y corregirlo.", style="Muted.TLabel").pack(side="left")
 

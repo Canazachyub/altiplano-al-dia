@@ -219,11 +219,14 @@ CUADRITO = '<font name="ZapfDingbats" size="6" color="#043F9B">n</font> '
 
 # ------------------------------------------------------------------ artículos
 def imagen_original(g, nota, posts=None):
-    """Foto que lleva la nota tal como vino de Facebook (_IMAGEN = elegida a mano en el editor)."""
+    """Foto que lleva la nota tal como vino de Facebook. Orden: _IMAGEN (elegida a mano en el editor),
+    _IMAGEN_IA (la mejor de las que trajeron los medios, elegida por Qwen: sin logos ni textos encima)
+    y, si no hay, la primera publicación con foto."""
     if nota.get("_SIN_FOTO"):
         return None
     posts = posts if posts is not None else storage.posts_de_grupo(g["id"])
-    for ruta in [nota.get("_IMAGEN")] + [p["imagen"] if "imagen" in p.keys() else None for p in posts]:
+    for ruta in [nota.get("_IMAGEN"), nota.get("_IMAGEN_IA")] + [p["imagen"] if "imagen" in p.keys() else None
+                                                                   for p in posts]:
         if ruta:
             try:
                 with Image.open(ruta) as im:
@@ -269,7 +272,8 @@ def _articulo(g, cfg) -> dict:
         "gid": g["id"], "ambito": g["ambito"] or "REGIONAL", "tema": g["tema"] or "",
         "ante": ante.upper().rstrip("."), "titular": _plano(nota.get("TITULAR") or g["titular"] or ""),
         "lugar": _plano(nota.get("LUGAR") or "").rstrip("."),
-        "pie": _pie_con_credito(_plano(nota.get("PIE_FOTO") or ""), _credito_foto(original, posts, cfg) if img else ""),
+        # Pie de foto: el titular de la nota. No se cita a otros medios en las fotos.
+        "pie": _plano(nota.get("TITULAR") or g["titular"] or "") if img else "",
         "img_original": original,
         "parrafos": parrafos, "img": img, "act": g["estado_pdf"] == "actualizacion",
         "palabras": sum(len(x.split()) for x in parrafos), "n_medios": storage.n_medios(g),
@@ -1058,6 +1062,22 @@ def _filete_h(c, x0, x1, y):
 
 
 # ------------------------------------------------------------------ ficha interna
+def ruta_ficha(destino) -> Path:
+    """La ficha de verificación es interna: va en un PDF aparte, junto al boletín, y nunca se publica."""
+    d = Path(str(destino))
+    return d.with_name(f"{d.stem}_ficha.pdf")
+
+
+def guardar_ficha(destino, dibujar, pagesize, numero):
+    """Crea <boletín>_ficha.pdf con `dibujar(canvas)`."""
+    from reportlab.pdfgen.canvas import Canvas
+    c = Canvas(str(ruta_ficha(destino)), pagesize=pagesize)
+    c.setTitle(f"Altiplano al Día — Ficha de verificación del boletín N° {numero} (uso interno)")
+    c.setAuthor("Altiplano al Día")
+    dibujar(c)
+    c.save()
+
+
 def _ficha(c, arts, paginas_de, numero, st):
     """Páginas finales de verificación (no publicables): fuentes, enlaces y discrepancias."""
     story = [Paragraph("Ficha de verificación", st["v_h"]),
@@ -1080,19 +1100,14 @@ def _ficha(c, arts, paginas_de, numero, st):
             vers = "; ".join(f"<b>{_x(v.get('medio', ''))}</b>: {_x(v.get('dice', ''))}" for v in d.get("versiones", []))
             story.append(Paragraph(f'<font color="{D["colores"]["alerta"]}"><b>Difieren:</b></font> {_x(d.get("aspecto", ""))} — {vers}',
                                    st["v"]))
-    primera = True
     while story:
-        c.showPage()
         _pie(c, numero)
-        if primera:
-            c.bookmarkPage("ficha")
-            c.addOutlineEntry("Ficha de verificación (interna)", "ficha", level=0)
-            primera = False
         f = Frame(M, BOTTOM, W - 2 * M, TOP - BOTTOM, showBoundary=0)
         antes = len(story)
         f.addFromList(story, c)
         if len(story) == antes:   # algo no entra en una página entera
             story.pop(0)
+        c.showPage()
 
 
 # ------------------------------------------------------------------ orden y generación
@@ -1291,8 +1306,8 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
         if pg.lat and not pg.portada:
             xr = pg.x_main + pg.w_main + GUT / 2 if not pg.lateral_izq else pg.x_main - GUT / 2
             _filete_v(c, xr, BOTTOM, pg.top)
-    _ficha(c, orden_indice, paginas_de, numero, st)
     c.save()
+    guardar_ficha(destino, lambda cf: _ficha(cf, orden_indice, paginas_de, numero, st), (W, H), numero)
     return paginas_de
 
 

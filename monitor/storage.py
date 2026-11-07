@@ -107,7 +107,8 @@ def init_db():
         # Web: en_web 1 = va a la web; web_estado '' (nunca subida) | 'publicada' | 'actualizar' (se editó
         # después de subirla); web_slug fija la dirección de la nota aunque luego cambie el titular.
         for col, typ in (("en_web", "INTEGER DEFAULT 0"), ("web_estado", "TEXT DEFAULT ''"),
-                         ("web_publicado", "TEXT"), ("web_slug", "TEXT")):
+                         ("web_publicado", "TEXT"), ("web_slug", "TEXT"),
+                         ("web_fijada", "INTEGER DEFAULT 0")):
             if col not in gcols:
                 _add_column(c, "grupos", col, typ)
         # índices de las columnas usadas en WHERE / ORDER BY (idempotentes)
@@ -435,6 +436,17 @@ def estado_web(g) -> str:
 def set_en_web(gids, valor: bool) -> None:
     with _conn() as c:
         c.executemany("UPDATE grupos SET en_web=? WHERE id=?", [(1 if valor else 0, g) for g in gids])
+
+
+def set_web_fijada(gid, valor: bool) -> None:
+    """📌 Fija (o suelta) una noticia arriba de la portada de la web; queda por subir."""
+    with _conn() as c:
+        c.execute("UPDATE grupos SET web_fijada=? WHERE id=?", (1 if valor else 0, gid))
+    marcar_web_editada([gid])
+
+
+def web_fijada(g) -> bool:
+    return bool("web_fijada" in g.keys() and g["web_fijada"])
 
 
 def marcar_web_editada(gids) -> None:
