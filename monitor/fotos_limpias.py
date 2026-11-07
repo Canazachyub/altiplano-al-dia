@@ -354,6 +354,10 @@ def elegir_mejor(g, emit=None) -> str | None:
 def _grupos_objetivo():
     from . import storage
     grupos = {g["id"]: g for g in storage.grupos_para_pdf(con_relleno=True)}
+    c = storage.consolidado_del_dia()          # lo ya impreso hoy: al actualizar el boletín se rehace
+    if c:
+        for g in storage.grupos_de_consolidado(c["n"]):
+            grupos.setdefault(g["id"], g)
     for g in storage.grupos_web():
         if storage.estado_web(g) != "en_linea":
             grupos.setdefault(g["id"], g)

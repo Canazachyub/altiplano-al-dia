@@ -261,14 +261,28 @@ def _pie_con_credito(pie, medio):
     return f"{pie} Foto: {medio}.".strip()
 
 
+def foto_publicable(nota, posts, original):
+    """La foto que se publica: SOLO imagen, sin ningún texto (lo comprueba el OCR de sin_texto).
+    Se prueba la elegida (limpia o, si no, recortada) y después las demás fotos de la nota.
+    None = ninguna foto de la nota sirve: la nota sale sin foto antes que con texto encima."""
+    from .fotos_limpias import ruta_para
+    from .sin_texto import verificada
+    otras = [p["imagen"] for p in posts if "imagen" in p.keys() and p["imagen"]]
+    for c in dict.fromkeys([original] + otras):
+        if not c or not Path(c).exists():
+            continue
+        limpia = c if nota.get("_FOTO_ORIGINAL") and c == original else ruta_para(c)
+        v = verificada(limpia) or (verificada(c) if limpia != c else None)
+        if v:
+            return v
+    return None
+
+
 def _articulo(g, cfg) -> dict:
     nota = json.loads(g["nota_json"])
     posts = storage.posts_de_grupo(g["id"])
     original = imagen_original(g, nota, posts)
-    img = original
-    if original and not nota.get("_FOTO_ORIGINAL"):
-        from .fotos_limpias import ruta_para
-        img = ruta_para(original)          # versión sin logos ni textos encima, si ya se limpió
+    img = foto_publicable(nota, posts, original)
     parrafos = [x.strip() for x in (nota.get("CUERPO") or "").split("\n\n") if x.strip()]
     ante = _plano(nota.get("ANTETITULO") or "")
     if not ante:

@@ -16,6 +16,7 @@ Pasos de publicar():
 import base64
 import hashlib
 import json
+import logging
 import re
 import shutil
 import threading
@@ -68,8 +69,11 @@ def _foto(origen: str, gid: int) -> str | None:
     dst = STAGE / rel
     previa = BASE_DIR / "data" / "web_cache" / f"n{gid}.jpg"   # se conserva entre publicaciones
     marca = previa.with_suffix(".txt")
-    firma = f"{src.resolve()}|{src.stat().st_mtime_ns}"
-    if not (previa.exists() and marca.exists() and marca.read_text(encoding="utf-8") == firma):
+    firma = f"{src.resolve()}|{src.stat().st_mtime_ns}|ocr5"
+    hecho = marca.read_text(encoding="utf-8") if marca.exists() else ""
+    if hecho == "RECHAZADA|" + firma:
+        return None
+    if not (previa.exists() and hecho == firma):
         previa.parent.mkdir(parents=True, exist_ok=True)
         try:
             with Image.open(src) as im:
@@ -77,6 +81,18 @@ def _foto(origen: str, gid: int) -> str | None:
                 im.thumbnail((FOTO_MAX, FOTO_MAX))
                 im.save(previa, "JPEG", quality=82, optimize=True, progressive=True)
         except Exception:  # noqa: BLE001
+            return None
+        # último control: la copia exacta que se sube no puede tener ningún texto
+        try:
+            from .sin_texto import textos
+            restos = textos(previa)
+        except Exception:  # noqa: BLE001
+            restos = ["sin verificar"]
+        if restos:
+            previa.unlink(missing_ok=True)
+            marca.write_text("RECHAZADA|" + firma, encoding="utf-8")
+            logging.getLogger("monitor").info("Web: foto de la nota %s no se publica (texto: %s)", gid,
+                                              [r[4] if isinstance(r, tuple) else r for r in restos][:5])
             return None
         marca.write_text(firma, encoding="utf-8")
     dst.parent.mkdir(parents=True, exist_ok=True)
