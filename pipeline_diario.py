@@ -1,0 +1,109 @@
+"""Pipeline completo sin intervención (para el Programador de tareas de Windows).
+
+1. Revisa Facebook (todas las páginas activas).
+2. Fase 2: agrupa, redacta, une repetidas con lo ya publicado (hoy y ayer), ajusta largos.
+3. Fotos: la IA elige la mejor y quita rótulos / marcas de agua.
+4. Boletín del día: si ya salió uno hoy lo actualiza (mismo N°); si no, genera el del día.
+   Lo de hoy va primero; los huecos se llenan con notas de ayer que no salieron en papel.
+   La ficha de verificación queda en un PDF aparte y NO se publica.
+5. Web: todas las noticias del día + el boletín → altiplanoaldia.pe (git push del sitio).
+
+Uso:  .venv\\Scripts\\python.exe pipeline_diario.py
+Registro: data\\pipeline_diario.log
+"""
+import logging
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE))
+SITIO = Path(r"E:\Altiplano al dia")
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+                    handlers=[logging.FileHandler(BASE / "data" / "pipeline_diario.log", encoding="utf-8"),
+                              logging.StreamHandler(sys.stdout)])
+log = logging.getLogger("pipeline")
+
+
+def emit(ev, d=None):
+    if ev in ("status", "error", "fin", "consolidado", "fase2_fin"):
+        log.info("[%s] %s", ev, d)
+
+
+def cerrar_gui() -> bool:
+    """Cierra el maquetador si está abierto (usa el mismo navegador y la misma base)."""
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name like 'pythonw%'\" | "
+          "Where-Object { $_.CommandLine -match 'main.py' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; 'x' }")
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True)
+    return "x" in r.stdout
+
+
+def abrir_gui():
+    subprocess.Popen([str(BASE / ".venv" / "Scripts" / "pythonw.exe"), "main.py"], cwd=str(BASE),
+                     creationflags=0x00000008)  # DETACHED_PROCESS
+
+
+def main():
+    log.info("===== Pipeline diario %s =====", datetime.now().strftime("%d/%m/%Y %H:%M"))
+    cerrar_gui()
+    try:
+        from monitor import config, storage
+        from monitor.worker import revisar
+        from monitor.analisis import ciclo_fase2, fase2_lock
+        from monitor import consolidado, web
+        from monitor.fotos_limpias import paso_limpieza
+
+        cfg = config.load_config()
+        storage.init_db()
+        log.info("Día editorial: %s", storage.dia_editorial())
+
+        # 1) Facebook
+        try:
+            revisar(cfg, emit)
+        except Exception:  # noqa: BLE001
+            log.exception("Revisión de Facebook")
+
+        # 2) Fase 2 (sin PDF ni limpieza en segundo plano: se hacen abajo, en orden)
+        ciclo_fase2(dict(cfg, pdf_consolidado_auto=False, limpiar_fotos=False), emit)
+
+        # 3) Fotos
+        try:
+            log.info("Fotos: %s", paso_limpieza(cfg, emit))
+        except Exception:  # noqa: BLE001
+            log.exception("Limpieza de fotos")
+
+        # 4) Boletín del día
+        with fase2_lock:
+            if storage.consolidado_del_dia():
+                res = consolidado.actualizar_boletin(cfg, emit)
+                log.info("Boletín actualizado: %s", res)
+            else:
+                out = consolidado.generar_consolidado(cfg)
+                c = storage.consolidado_del_dia()
+                log.info("Boletín nuevo: %s (N° %s, %s notas)", out, c and c["n"], c and c["n_noticias"])
+                if c:
+                    storage.set_en_web([g["id"] for g in storage.grupos_de_consolidado(c["n"])], True)
+            storage.set_en_web([g["id"] for g in storage.todas_del_dia()], True)
+
+        # 5) Web
+        log.info(web.publicar(cfg, avisar=lambda t: log.info("web: %s", t)))
+        git = ["git", "-C", str(SITIO)]
+        subprocess.run(git + ["add", "public"], check=True)
+        if subprocess.run(git + ["diff", "--cached", "--quiet"]).returncode:
+            subprocess.run(git + ["commit", "-q", "-m",
+                                  f"Web y boletín actualizados {datetime.now():%d/%m/%Y %H:%M} (automático)"], check=True)
+            subprocess.run(git + ["push", "-q"], check=True)
+            log.info("Sitio subido a GitHub: se publica en altiplanoaldia.pe en ~1 minuto.")
+        else:
+            log.info("El sitio no tenía cambios.")
+    except Exception:  # noqa: BLE001
+        log.exception("Pipeline diario")
+    finally:
+        abrir_gui()                      # el maquetador queda abierto al terminar
+        log.info("===== Fin del pipeline %s =====", datetime.now().strftime("%H:%M"))
+
+
+if __name__ == "__main__":
+    main()
