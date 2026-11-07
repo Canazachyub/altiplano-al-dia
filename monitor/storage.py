@@ -334,9 +334,10 @@ def grupos_para_pdf(dia: str | None = None, con_relleno: bool = False):
         # las del día (con la madrugada siguiente: el boletín se cierra tarde) y las que se pusieron a mano
         # en una página desde la vista previa
         fijas = _fijas()
-        q += (f" AND ({_SQL_DIA}"
+        ayer = (datetime.strptime(dia, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        q += (f" AND ({_SQL_DIA} OR {_SQL_TARDE}"
               + (f" OR id IN ({','.join('?' * len(fijas))})" if fijas else "") + ")")
-        args = (*_args_dia(dia), *fijas)
+        args = (*_args_dia(dia), ayer, f"{HORA_ARRASTRE:02d}", *fijas)
     with _conn() as c:
         return c.execute(q, args).fetchall()
 
@@ -398,6 +399,7 @@ def guardar_nota(gid, nota: dict) -> None:
 
 # ------------------------------------------------------------------ día de trabajo
 HORA_CIERRE = 5     # hasta las 5 a. m. se sigue trabajando el boletín del día anterior
+HORA_ARRASTRE = 15  # lo publicado desde las 3 p. m. del día anterior también es del boletín de hoy
 
 
 def dia_editorial(ahora: datetime | None = None) -> str:
@@ -415,6 +417,23 @@ _SQL_DIA = ("(substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ? OR "
 def _args_dia(dia: str) -> tuple:
     sig = (datetime.strptime(dia, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
     return dia, sig, f"{HORA_CIERRE:02d}"
+
+
+_SQL_TARDE = ("(substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ? AND "
+              "substr(COALESCE(fecha_hecho, actualizado), 12, 2) >= ?)")
+
+
+def dia_boletin(g) -> str:
+    """Boletín al que corresponde una noticia: como dia_de, pero lo publicado desde HORA_ARRASTRE
+    (3 p. m.) cuenta ya para el boletín del día siguiente."""
+    f = g["fecha_hecho"] or g["actualizado"] or ""
+    try:
+        d = datetime.fromisoformat(f[:19])
+    except ValueError:
+        return f[:10]
+    if d.hour >= HORA_ARRASTRE:
+        return (d + timedelta(days=1)).strftime("%Y-%m-%d")
+    return dia_editorial(d)
 
 
 def dia_de(g) -> str:

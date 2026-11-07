@@ -283,7 +283,7 @@ def _articulo(g, cfg) -> dict:
         "img_original": original,
         "parrafos": parrafos, "img": img, "act": g["estado_pdf"] == "actualizacion",
         "palabras": sum(len(x.split()) for x in parrafos), "n_medios": storage.n_medios(g),
-        "nota": nota, "grupo": g, "dia": storage.dia_de(g),
+        "nota": nota, "grupo": g, "dia": storage.dia_boletin(g),
     }
 
 
