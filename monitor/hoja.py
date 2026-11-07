@@ -40,6 +40,9 @@ def subir(cfg, notas: list, dia: str) -> str:
         fotos = _subir_fotos(cfg, notas)
         j = _post(cfg, {"accion": "publicar", "clave": _clave(), "dia": dia,
                         "notas": [{k: n.get(k) for k in campos} for n in notas]})
+    except requests.RequestException as e:
+        log.warning("Sheets: sin conexión (%s)", e)
+        return f"Sheets: no se pudo subir (sin conexión con Apps Script: {e.__class__.__name__})."
     except Exception as e:  # noqa: BLE001
         log.warning("Sheets: no se pudo subir (%s)", e)
         return f"Sheets: no se pudo subir ({e})."
