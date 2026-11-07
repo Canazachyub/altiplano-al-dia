@@ -114,7 +114,11 @@ def save_config(cfg: dict) -> None:
 
 
 def page_slug(url: str) -> str:
-    """https://www.facebook.com/unapunooficial -> unapunooficial"""
+    """https://www.facebook.com/unapunooficial -> unapunooficial
+    https://www.facebook.com/profile.php?id=61582496971412 -> id61582496971412 (páginas sin nombre de usuario)"""
+    m = re.search(r"profile\.php\?(?:.*&)?id=(\d+)", url or "")
+    if m:
+        return f"id{m.group(1)}"
     path = re.sub(r"^https?://(www\.|m\.)?facebook\.com/", "", url.strip()).strip("/")
     path = path.split("?")[0].split("/")[0]
     return re.sub(r"[^\w.-]", "_", path) or "pagina"
@@ -124,7 +128,10 @@ def normalize_page_url(text: str) -> str:
     text = text.strip()
     if not text.startswith("http"):
         text = "https://www.facebook.com/" + text.lstrip("/")
-    return "https://www.facebook.com/" + page_slug(text)
+    s = page_slug(text)
+    if re.fullmatch(r"id\d+", s) and "profile.php" in text:
+        return f"https://www.facebook.com/profile.php?id={s[2:]}"
+    return "https://www.facebook.com/" + s
 
 
 # ---------- API keys ----------
