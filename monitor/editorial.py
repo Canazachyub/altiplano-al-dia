@@ -23,6 +23,7 @@ from .config import DB_PATH, nombre_medio
 log = logging.getLogger("monitor")
 ESTADO_PATH = DB_PATH.parent / "editorial.json"
 MAX_UNIR = 6          # notas como máximo en una fusión
+MAX_ORIGINALES = 12   # publicaciones originales que se mandan al unir (para contrastar)
 SECCIONES = ("LOCAL", "DISTRITAL", "PROVINCIAL", "POLÍTICA", "POLICIAL", "DEPORTES", "NACIONAL", "INTERNACIONAL")
 
 SYS_EDITOR = """Eres el jefe de redacción de "Altiplano al Día", diario de Puno (Perú). Recibes las
@@ -47,6 +48,11 @@ cuántos medios la cubrieron y fecha). Tu trabajo:
    accidentes en provincias o días distintos, elecciones de distritos distintos.
    Revisa con especial atención los "pares_sospechosos" que te indico (mismo antetítulo o
    titulares parecidos): fusiónalos salvo que sean claramente de lugares o días distintos.
+   Las noticias con "publicada": true YA SALIERON en el boletín o la web de hoy. Si una noticia
+   nueva es el mismo hecho, su continuación o una novedad del mismo caso (más heridos, la
+   identificación de la víctima, la captura del autor, otra reacción a la misma declaración),
+   fusiónala CON la publicada: así se actualiza esa nota y no sale dos veces. No propongas
+   fusiones solo entre publicadas.
    Cada id puede estar en una sola fusión, de 2 a 6 ids.
    "principal": el id cuyo hecho es el más importante o el más reciente del grupo.
    "tipo": "mismo_hecho" o "conjunto".
@@ -94,7 +100,10 @@ misma historia en curso. Escribe UNA sola nota completa y bien organizada que la
   ("en un primer reporte se habló de…"). Es UN solo hecho: no lo cuentes dos veces.
 - Si "tipo" es "conjunto" son hechos distintos: el titular los agrupa ("Dos accidentes en la
   vía Puno–Ilave dejan…") y el cuerpo cuenta cada uno por separado, sin mezclar sus datos.
-- No agregues nada que no esté en las notas recibidas.
+- Recibes también "fuentes_originales" (lo que publicó cada medio). Contrasta las notas con ellas
+  y rescata los datos que falten (nombres, edades, cifras, horas, lugares exactos, citas
+  textuales): la nota final debe tener lo mejor de cada fuente.
+- No agregues nada que no esté en las notas o en las fuentes recibidas.
 
 Responde SOLO JSON, sin texto adicional ni bloques de código:
 {"ANTETITULO":"…","TITULAR":"…","BAJADA":"…","LUGAR":"…","PIE_FOTO":"…",
@@ -141,7 +150,8 @@ def _ficha(g) -> dict:
     return {"id": g["id"], "ambito": g["ambito"], "tema": g["tema"], "medios": storage.n_medios(g),
             "fecha": (g["fecha_hecho"] or "")[:16], "titular": n.get("TITULAR") or g["titular"],
             "antetitulo": n.get("ANTETITULO") or "", "lugar": n.get("LUGAR") or "",
-            "bajada": (n.get("BAJADA") or "")[:240], "texto": (n.get("CUERPO") or "")[:420]}
+            "bajada": (n.get("BAJADA") or "")[:240], "texto": (n.get("CUERPO") or "")[:420],
+            **({"publicada": True} if g["estado_pdf"] == "publicado" else {})}
 
 
 _VACIAS = set("de la el los las del en y a un una por con para que se al su sus lo es tras ante sobre "
@@ -156,19 +166,44 @@ def _palabras(t):
     return {w for w in re.findall(r"[a-z0-9]{3,}", t) if w not in _VACIAS}
 
 
+_NO_NOMBRES = set("puno juliaca peru perú region región gobierno policia policía fiscalia fiscalía municipalidad "
+                  "provincial distrital regional nacional corte superior suprema jurado electoral especial "
+                  "congreso ministerio presidente presidenta alcalde alcaldesa".split())
+
+
+def _nombres(t):
+    """Nombres propios (palabras con mayúscula que no abren la frase): Tonconi, Zunini, Ichu, Aliaga…"""
+    import re
+    out = set()
+    for frase in re.split(r"[.:;!?\n]", t or ""):
+        palabras = re.findall(r"\w+", frase)
+        for w in palabras[1:]:
+            if len(w) >= 4 and w[0].isupper() and not w.isupper() and w.lower() not in _NO_NOMBRES:
+                out |= _palabras(w)
+    return out
+
+
 def pares_sospechosos(grupos) -> list:
-    """Pares de noticias que probablemente cuentan lo mismo (mismo antetítulo, o titular + inicio muy
-    parecidos el mismo día). Se le señalan a Claude para que no se le escapen."""
+    """Pares de noticias que probablemente cuentan lo mismo: mismo antetítulo, titular + inicio muy
+    parecidos, o los mismos nombres propios (personas, lugares) en días vecinos. Se le señalan a
+    Claude para que no se le escapen."""
+    from datetime import date
     fichas = []
     for g in grupos:
         n = _nota(g)
-        fichas.append((g["id"], (n.get("ANTETITULO") or "").strip().lower(), (g["fecha_hecho"] or "")[:10],
-                       _palabras(f"{n.get('TITULAR', '')} {n.get('BAJADA', '')} {(n.get('CUERPO') or '')[:300]}")))
+        cab = f"{n.get('TITULAR', '')}. {n.get('BAJADA', '')}"
+        try:
+            dia = date.fromisoformat(storage.dia_de(g))
+        except ValueError:
+            dia = None
+        fichas.append((g["id"], (n.get("ANTETITULO") or "").strip().lower(), dia,
+                       _palabras(f"{cab} {(n.get('CUERPO') or '')[:300]}"), _nombres(cab)))
     pares = []
-    for i, (a, ante_a, dia_a, pa) in enumerate(fichas):
-        for b, ante_b, dia_b, pb in fichas[i + 1:]:
+    for i, (a, ante_a, dia_a, pa, na) in enumerate(fichas):
+        for b, ante_b, dia_b, pb, nb in fichas[i + 1:]:
+            cerca = dia_a is not None and dia_b is not None and abs((dia_a - dia_b).days) <= 1
             parecido = len(pa & pb) / max(1, len(pa | pb))
-            if (ante_a and ante_a == ante_b) or (dia_a == dia_b and parecido >= 0.22):
+            if (ante_a and ante_a == ante_b) or (cerca and (parecido >= 0.22 or len(na & nb) >= 2)):
                 pares.append([a, b])
     return pares
 
@@ -230,7 +265,12 @@ def unir(cfg, ids, principal, cancelar=None, tipo="mismo_hecho") -> bool:
         ps = storage.posts_de_grupo(gid)
         posts_por_grupo[gid] = [p["id"] for p in ps]
         medios_todos += [nombre_medio(p["pagina"], cfg) for p in ps] + [p["pagina"] for p in ps]
-    user = json.dumps({"tipo": tipo, "temas_permitidos": cfg["temas"], "notas": notas}, ensure_ascii=False)
+    originales = sorted((p for gid in grupos for p in storage.posts_de_grupo(gid)),
+                        key=lambda p: len(p["texto"] or ""), reverse=True)[:MAX_ORIGINALES]
+    fuentes = [{"medio": nombre_medio(p["pagina"], cfg), "fecha": (p["publicado"] or p["detectado"] or "")[:16],
+                "texto": (p["texto"] or "")[:1500]} for p in originales]
+    user = json.dumps({"tipo": tipo, "temas_permitidos": cfg["temas"], "notas": notas,
+                       "fuentes_originales": fuentes}, ensure_ascii=False)
     tarea = f"unir[{','.join(map(str, grupos))}]"
 
     def pedir(u, t):
@@ -251,7 +291,7 @@ def unir(cfg, ids, principal, cancelar=None, tipo="mismo_hecho") -> bool:
     gp = grupos[principal]
     previa = _nota(gp)
     # foto: la elegida a mano en la principal o, si no tiene, la de cualquiera de las otras
-    for k in ("_IMAGEN", "_SIN_FOTO"):
+    for k in ("_IMAGEN", "_SIN_FOTO", "_IMAGEN_IA"):
         if previa.get(k):
             nueva[k] = previa[k]
     if not nueva.get("_IMAGEN") and not nueva.get("_SIN_FOTO"):
@@ -281,19 +321,25 @@ def unir(cfg, ids, principal, cancelar=None, tipo="mismo_hecho") -> bool:
     ambito = nueva.get("ambito") if nueva.get("ambito") in cfg["ambitos"] else gp["ambito"]
     tema = nueva.get("tema") if nueva.get("tema") in cfg["temas"] else gp["tema"]
     otros = [gid for gid in grupos if gid != principal]
+    en_web = any(g["en_web"] for g in grupos.values())
+    estado = "actualizacion" if gp["ultimo_pdf"] else (gp["estado_pdf"] if gp["estado_pdf"] != "descartado"
+                                                        else "nuevo")
     with storage._conn() as c:
         for gid in otros:
             c.execute("UPDATE posts SET grupo_id=? WHERE grupo_id=?", (principal, gid))
             n = _nota(grupos[gid])
             n["_fusionado_en"] = principal
-            c.execute("UPDATE grupos SET estado_pdf='descartado', en_periodico=0, nota_json=?, actualizado=? "
-                      "WHERE id=?", (json.dumps(n, ensure_ascii=False), storage.now_iso(), gid))
+            # en_web=0: si ya estaba en la web, la próxima subida la quita (no queda repetida)
+            c.execute("UPDATE grupos SET estado_pdf='descartado', en_periodico=0, en_web=0, nota_json=?, "
+                      "actualizado=? WHERE id=?", (json.dumps(n, ensure_ascii=False), storage.now_iso(), gid))
+        c.execute("UPDATE grupos SET estado_pdf=?, en_web=? WHERE id=?", (estado, 1 if en_web else 0, principal))
         fechas = [g["fecha_hecho"] for g in orden if g["fecha_hecho"]]
         c.execute("UPDATE grupos SET nota_json=?, titular=?, ambito=?, tema=?, medios=?, n_fuentes=?, "
                   "fecha_hecho=?, actualizado=?, en_periodico=1 WHERE id=?",
                   (json.dumps(nueva, ensure_ascii=False), nueva["TITULAR"], ambito, tema, ", ".join(medios),
                    sum(len(v) for v in posts_por_grupo.values()), max(fechas) if fechas else gp["fecha_hecho"],
                    storage.now_iso(), principal))
+    storage.marcar_web_editada([principal])
     log.info("Paso editorial: notas %s unidas en #%s «%s»", sorted(grupos), principal, nueva["TITULAR"])
     return True
 
@@ -336,9 +382,12 @@ def paso_editorial(cfg, emit=lambda *a: None, cancelar=None, forzar=False) -> di
     """Evalúa las noticias pendientes, une las repetidas y guarda el impacto. Solo llama a Claude
     si cambió algo desde la última vez (o con forzar=True)."""
     out = {"unidas": 0, "evaluadas": 0, "omitido": False}
-    grupos = list(storage.grupos_para_pdf())
-    if not grupos:
+    pendientes = list(storage.grupos_para_pdf())
+    if not pendientes:
         return out
+    # lo que ya salió hoy entra como referencia: una novedad del mismo hecho actualiza esa nota
+    ids_pend = {g["id"] for g in pendientes}
+    grupos = pendientes + [g for g in storage.publicadas_del_dia() if g["id"] not in ids_pend]
     estado = _leer_estado()
     firma = _firma(grupos)
     if not forzar and estado.get("firma") == firma:
@@ -371,6 +420,12 @@ def paso_editorial(cfg, emit=lambda *a: None, cancelar=None, forzar=False) -> di
         ids = f["ids"]
         if any(frozenset((a, b)) in no_unir for a in ids for b in ids if a != b):
             continue                       # el editor las separó a mano: se respeta
+        if not any(i in ids_pend for i in ids):
+            continue                       # solo publicadas: ya salieron así, no se rehacen
+        publicadas = [i for i in ids if i not in ids_pend]
+        if publicadas and f["principal"] not in publicadas:
+            # la principal es la que ya salió: conserva su lugar en el boletín y su dirección en la web
+            f["principal"] = max(publicadas, key=lambda i: r["impacto"].get(i, (0,))[0])
         emit("status", f"Claude: uniendo {len(ids)} notas sobre «{f['evento'] or 'el mismo hecho'}»…")
         try:
             if unir(cfg, ids, f["principal"], cancelar, f.get("tipo", "mismo_hecho")):
@@ -379,7 +434,10 @@ def paso_editorial(cfg, emit=lambda *a: None, cancelar=None, forzar=False) -> di
         except Exception as e:  # noqa: BLE001
             log.exception("unir %s", ids)
             emit("error", f"No se pudieron unir las notas {ids}: {e}")
-    _guardar_estado({"firma": _firma(storage.grupos_para_pdf()), "fecha": storage.now_iso(),
+    ids_pend = {g["id"] for g in storage.grupos_para_pdf()}
+    _guardar_estado({"firma": _firma(list(storage.grupos_para_pdf()) +
+                                     [g for g in storage.publicadas_del_dia() if g["id"] not in ids_pend]),
+                     "fecha": storage.now_iso(),
                      "fusiones": r["fusiones"]})
     emit("status", f"Revisión editorial: {out['evaluadas']} noticias ordenadas por impacto, "
                    f"{out['unidas']} repetidas unidas.")

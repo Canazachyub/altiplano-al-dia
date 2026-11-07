@@ -225,8 +225,14 @@ def imagen_original(g, nota, posts=None):
     if nota.get("_SIN_FOTO"):
         return None
     posts = posts if posts is not None else storage.posts_de_grupo(g["id"])
-    for ruta in [nota.get("_IMAGEN"), nota.get("_IMAGEN_IA")] + [p["imagen"] if "imagen" in p.keys() else None
-                                                                   for p in posts]:
+    from .fotos_limpias import estado as _estado_foto
+
+    def _orden(ruta):            # sin rótulos > ya limpiada > sin revisar > con rótulos
+        e = _estado_foto(ruta)
+        return {"sin_rotulos": 0, "limpia": 1}.get(e.get("estado"), 3 if e.get("rotulos") else 2)
+    de_posts = [p["imagen"] for p in posts if "imagen" in p.keys() and p["imagen"]]
+    de_posts = sorted(dict.fromkeys(de_posts), key=_orden)
+    for ruta in [nota.get("_IMAGEN"), nota.get("_IMAGEN_IA")] + de_posts:
         if ruta:
             try:
                 with Image.open(ruta) as im:
@@ -1361,3 +1367,74 @@ def _generar(cfg, grupos, destino, registrar, numero, ahora):
         storage.registrar_consolidado(destino, min(fechas) if fechas else None,
                                       max(fechas) if fechas else None, [g["id"] for g in grupos])
     return destino
+
+
+# ------------------------------------------------------------------ actualizar el boletín del día
+def actualizar_boletin(cfg: dict, emit=lambda *a: None, cancelar=None) -> dict | None:
+    """Rehace el boletín ya publicado hoy (mismo N° y fecha) con lo que llegó después.
+
+    1. El jefe de redacción une lo nuevo con lo ya publicado (una novedad del mismo hecho actualiza
+       esa nota en vez de salir dos veces) y ordena todo por impacto.
+    2. Cada nota se ajusta al largo de su espacio y la IA elige y limpia las fotos.
+    3. El PDF se rehace con lo mejor del día (lo que entra en la plantilla, por impacto).
+    4. La web recibe TODAS las noticias del día (las que no entraron en el papel también).
+    None si hoy todavía no se publicó ningún boletín. Quien llama debe tener fase2_lock."""
+    c = storage.consolidado_del_dia()
+    if not c:
+        return None
+    n = c["n"]
+    ahora = datetime.fromisoformat(c["fecha"][:19])
+    tabloide = cfg.get("formato", "tabloide") == "tabloide"
+
+    def edicion():
+        gs = {g["id"]: g for g in storage.grupos_de_consolidado(n)}
+        for g in storage.grupos_para_pdf():
+            gs.setdefault(g["id"], g)
+        return list(gs.values())
+
+    from .editorial import paso_editorial
+    paso_editorial(cfg, emit, cancelar)
+    if cancelar and cancelar():
+        return None
+    if tabloide:
+        from .redaccion import paso_medida
+        paso_medida(cfg, emit, cancelar, grupos=edicion(), ahora=ahora)
+    if cancelar and cancelar():
+        return None
+    from .fotos_limpias import paso_limpieza
+    emit("status", "Eligiendo y limpiando las fotos de las notas nuevas…")
+    paso_limpieza(cfg, emit, cancelar)
+    if cancelar and cancelar():
+        return None
+
+    grupos = edicion()
+    destino = Path(c["path"])
+    try:                                    # si el PDF está abierto en el visor, se guarda una versión nueva
+        if destino.exists():
+            destino.open("ab").close()
+    except OSError:
+        destino = destino.with_name(destino.stem + f"_act_{datetime.now():%H%M%S}.pdf")
+    emit("status", f"Rehaciendo el boletín N° {n} con {len(grupos)} noticias…")
+    out = generar_consolidado(cfg, grupos=grupos, destino=destino, registrar=False, numero=n, ahora=ahora)
+    if tabloide:
+        from .redaccion import plan
+        dentro = set(plan(cfg, ahora, grupos))
+    else:
+        dentro = {g["id"] for g in grupos}
+    nuevas = 0
+    with storage._conn() as con:
+        for g in grupos:
+            if g["id"] not in dentro:
+                continue
+            if g["estado_pdf"] != "publicado":
+                nuevas += 1
+            con.execute("UPDATE grupos SET ultimo_pdf=?, estado_pdf='publicado', en_periodico=1 WHERE id=?",
+                        (n, g["id"]))
+            con.execute("UPDATE posts SET consolidado_n=? WHERE grupo_id=? AND consolidado_n IS NULL", (n, g["id"]))
+    storage.actualizar_consolidado(n, out, len(dentro))
+    del_dia = [g["id"] for g in storage.todas_del_dia()]
+    storage.set_en_web(del_dia, True)
+    logging.getLogger("monitor").info("Boletín N° %s actualizado: %s notas (%s nuevas o actualizadas); web: %s", n, len(dentro), nuevas,
+             len(del_dia))
+    return {"n": n, "path": out, "notas": len(dentro), "nuevas": nuevas, "fuera": len(grupos) - len(dentro),
+            "web": len(del_dia)}

@@ -225,7 +225,7 @@ class InicioTab(ttk.Frame):
     def _ir_noticias(self):
         self.app.d_mostrar.set("Todas las del día")
         self.app.nb.select(self.app.tab_dash)
-        self.app.ir_a_dia(datetime.now().strftime("%Y-%m-%d"))
+        self.app.ir_a_dia(storage.dia_editorial())
 
     def _ir_portada(self):
         self.app.nb.select(self.app.portada_tab)

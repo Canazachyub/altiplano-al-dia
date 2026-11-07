@@ -50,11 +50,11 @@ def largo(nota) -> int:
     return sum(len(p) for p in (nota.get("CUERPO") or "").split("\n\n") if p.strip() and not p.startswith("## "))
 
 
-def plan(cfg, ahora=None):
+def plan(cfg, ahora=None, grupos=None):
     """{gid: (rol, sección de la página, página)} según la plantilla del día."""
     from . import consolidado as C, maqueta
     ahora = ahora or datetime.now()
-    arts = [C._articulo(g, cfg) for g in storage.grupos_para_pdf()]
+    arts = [C._articulo(g, cfg) for g in (grupos if grupos is not None else storage.grupos_para_pdf())]
     paginas, _ = maqueta.armar(arts, maqueta.plantilla_del_dia(ahora), C.leer_fijas())
     return {h.art["gid"]: (h.rol, p["seccion"], p["n"]) for p in paginas for h in p["huecos"] if h.art}
 
@@ -130,10 +130,10 @@ def ajustar(cfg, gid, rol, cancelar=None) -> bool:
     return True
 
 
-def paso_medida(cfg, emit=lambda *a: None, cancelar=None) -> dict:
+def paso_medida(cfg, emit=lambda *a: None, cancelar=None, grupos=None, ahora=None) -> dict:
     """Ajusta al largo de su hueco todas las notas de la próxima edición que lo necesiten."""
     out = {"ajustadas": 0, "revisadas": 0, "errores": 0}
-    p = plan(cfg)
+    p = plan(cfg, ahora, grupos)
     pend = []
     for gid, (rol, _sec, pag) in p.items():
         g = storage.get_grupo(gid)

@@ -320,16 +320,17 @@ def grupos_para_pdf(dia: str | None = None):
     """Noticias que van al próximo boletín: solo las del día (fecha del hecho = hoy, hora local).
     dia: 'AAAA-MM-DD' para otro día; '' = sin filtro de fecha."""
     if dia is None:
-        dia = datetime.now().strftime("%Y-%m-%d")
+        dia = dia_editorial()
     q = ("SELECT * FROM grupos WHERE estado_pdf IN ('nuevo','actualizacion') AND nota_json IS NOT NULL"
          " AND COALESCE(en_periodico, 1)=1")
     args = ()
     if dia:
-        # las del día, y las que se pusieron a mano en una página desde la vista previa
+        # las del día (con la madrugada siguiente: el boletín se cierra tarde) y las que se pusieron a mano
+        # en una página desde la vista previa
         fijas = _fijas()
-        q += (" AND (substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ?"
+        q += (f" AND ({_SQL_DIA}"
               + (f" OR id IN ({','.join('?' * len(fijas))})" if fijas else "") + ")")
-        args = (dia, *fijas)
+        args = (*_args_dia(dia), *fijas)
     with _conn() as c:
         return c.execute(q, args).fetchall()
 
@@ -381,9 +382,62 @@ def guardar_nota(gid, nota: dict) -> None:
 
 
 # ------------------------------------------------------------------ día de trabajo
+HORA_CIERRE = 5     # hasta las 5 a. m. se sigue trabajando el boletín del día anterior
+
+
+def dia_editorial(ahora: datetime | None = None) -> str:
+    """Día del boletín en curso ('AAAA-MM-DD'). Pasada la medianoche y hasta HORA_CIERRE sigue siendo el
+    día anterior: antes, a las 00:05 el maquetador ya buscaba las noticias «de mañana» y no encontraba ninguna
+    (no unía repetidas, no limpiaba fotos, no armaba el boletín)."""
+    return ((ahora or datetime.now()) - timedelta(hours=HORA_CIERRE)).strftime("%Y-%m-%d")
+
+
+_SQL_DIA = ("(substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ? OR "
+            "(substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ? AND "
+            "substr(COALESCE(fecha_hecho, actualizado), 12, 2) < ?))")
+
+
+def _args_dia(dia: str) -> tuple:
+    sig = (datetime.strptime(dia, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    return dia, sig, f"{HORA_CIERRE:02d}"
+
+
 def dia_de(g) -> str:
-    """Día de trabajo de una noticia ('AAAA-MM-DD'): el de la fecha del hecho (o de la última actualización)."""
-    return (g["fecha_hecho"] or g["actualizado"] or "")[:10]
+    """Día de trabajo de una noticia ('AAAA-MM-DD'): el de la fecha del hecho (o de la última actualización).
+    Lo publicado de madrugada (antes de HORA_CIERRE) cuenta para el día anterior."""
+    f = g["fecha_hecho"] or g["actualizado"] or ""
+    try:
+        return dia_editorial(datetime.fromisoformat(f[:19]))
+    except ValueError:
+        return f[:10]
+
+
+def consolidado_del_dia(dia: str | None = None):
+    """El último boletín publicado para el día editorial `dia` (hoy por defecto), o None."""
+    dia = dia or dia_editorial()
+    for c in list_consolidados():
+        try:
+            if dia_editorial(datetime.fromisoformat(c["fecha"][:19])) == dia:
+                return c
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def publicadas_del_dia(dia: str | None = None):
+    """Noticias del día que ya salieron en un boletín (para unir con ellas lo que llegue después)."""
+    dia = dia or dia_editorial()
+    with _conn() as c:
+        return c.execute(f"SELECT * FROM grupos WHERE estado_pdf='publicado' AND nota_json IS NOT NULL AND {_SQL_DIA}",
+                         _args_dia(dia)).fetchall()
+
+
+def todas_del_dia(dia: str | None = None):
+    """Todas las noticias válidas del día (publicadas o no): lo que va a la web."""
+    dia = dia or dia_editorial()
+    with _conn() as c:
+        return c.execute(f"SELECT * FROM grupos WHERE estado_pdf != 'descartado' AND nota_json IS NOT NULL "
+                         f"AND {_SQL_DIA}", _args_dia(dia)).fetchall()
 
 
 def dias_con_noticias(limite: int = 60):
@@ -402,8 +456,13 @@ def grupos_del_dia(dia: str | None):
     q = "SELECT * FROM grupos WHERE nota_json IS NOT NULL AND estado_pdf != 'descartado'"
     args = ()
     if dia:
-        q += " AND substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ?"
-        args = (dia,)
+        # de las 5 a. m. del día a las 5 a. m. del siguiente (como dia_de)
+        dia, sig, hh = _args_dia(dia)
+        q += (" AND ((substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ? AND "
+              "substr(COALESCE(fecha_hecho, actualizado), 12, 2) >= ?) OR "
+              "(substr(COALESCE(fecha_hecho, actualizado), 1, 10) = ? AND "
+              "substr(COALESCE(fecha_hecho, actualizado), 12, 2) < ?))")
+        args = (dia, hh, sig, hh)
     q += " ORDER BY COALESCE(fecha_hecho, actualizado) DESC"
     with _conn() as c:
         return c.execute(q, args).fetchall()

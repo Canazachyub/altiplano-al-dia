@@ -151,7 +151,7 @@ def _boletines(dia=None) -> list:
     except ImportError:
         pdfium = None
     for c in storage.list_consolidados()[:MAX_BOLETINES]:
-        if dia and (c["fecha"] or "")[:10] != dia:
+        if dia and storage.dia_editorial(datetime.fromisoformat((c["fecha"] or "1970-01-01")[:19])) != dia:
             continue
         src = Path(c["path"] or "")
         if not src.exists():
@@ -211,7 +211,7 @@ def armar(cfg):
         shutil.rmtree(STAGE)
     (STAGE / "data").mkdir(parents=True)
     usados, notas, gids = set(), [], []
-    hoy = datetime.now().strftime("%Y-%m-%d")
+    hoy = storage.dia_editorial()
     solo_hoy = cfg.get("web_solo_hoy", True)        # como el boletín: en la web solo lo del día
     for g in storage.grupos_web():
         if solo_hoy and storage.dia_de(g) != hoy:

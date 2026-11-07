@@ -47,6 +47,11 @@ ORDEN = ("Edit image 1: remove ALL overlaid graphics added on top of the photogr
          "itself exactly the same: same people, faces, buildings, objects, composition, colors and lighting. "
          "Add nothing new.")
 
+COBERTURA = ("What percentage (0-100) of this image's area is covered by graphics added on top of the photograph "
+             "(overlaid text, headline panels, colored banners, logos, watermarks, frames) or is not a photograph "
+             "at all (a scanned newspaper page, a text card, a meme)? Answer only the number.")
+COBERTURA_OK = 25                    # una foto limpia (o bien limpiada) queda por debajo de esto
+
 _lock = threading.Lock()             # una sola limpieza a la vez (la GPU no da para dos)
 _indice_lock = threading.Lock()
 
@@ -73,6 +78,16 @@ def _anotar(origen: str, **datos) -> None:
         tmp.replace(INDICE)
 
 
+def _sumar(origen: str, **datos) -> None:
+    with _indice_lock:
+        d = _leer()
+        d[_clave(origen)] = {**d.get(_clave(origen), {}), **datos}
+        DIR.mkdir(parents=True, exist_ok=True)
+        tmp = INDICE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(INDICE)
+
+
 def estado(ruta: str) -> dict:
     return _leer().get(_clave(ruta), {})
 
@@ -83,6 +98,9 @@ def ruta_para(ruta: str | None) -> str | None:
         return ruta
     e = estado(ruta)
     if e.get("estado") == "limpia" and e.get("limpia") and Path(e["limpia"]).exists():
+        cl, co = e.get("cobertura_limpia"), e.get("cobertura")
+        if cl is not None and co is not None and cl >= co:
+            return ruta                  # la limpieza no sirvió (el panel de texto sigue ahí)
         return e["limpia"]
     return ruta
 
@@ -150,6 +168,43 @@ def tiene_rotulos(ruta: str) -> bool | None:
         log.info("Ollama no disponible para revisar fotos: %s", e)
         return None
     return r.get("response", "").strip().upper().startswith("Y")
+
+
+def _cobertura_vl(ruta: str) -> int | None:
+    try:
+        r = _post(OLLAMA_URL + "/api/generate", {
+            "model": MODELO_VL, "prompt": COBERTURA, "images": [_jpeg_b64(ruta)], "stream": False,
+            "options": {"temperature": 0}, "keep_alive": "1m"}, timeout=300)
+    except Exception as e:  # noqa: BLE001
+        log.info("Ollama no disponible para medir rótulos: %s", e)
+        return None
+    import re
+    m = re.search(r"\d+", r.get("response", ""))
+    return max(0, min(100, int(m.group()))) if m else None
+
+
+def cobertura(ruta: str) -> int | None:
+    """% de la imagen tapado por rótulos (o que no es foto: página de diario, meme). Se guarda en el índice."""
+    e = estado(ruta)
+    if e.get("estado") == "sin_rotulos":
+        return 0
+    if e.get("cobertura") is not None:
+        return e["cobertura"]
+    c = _cobertura_vl(ruta)
+    if c is not None:
+        _sumar(ruta, cobertura=c)
+    return c
+
+
+def puntaje(ruta: str) -> int:
+    """Cuánto rótulo tendría la foto en el boletín: la mejor entre la original y su versión limpia."""
+    e = estado(ruta)
+    if e.get("estado") == "sin_rotulos":
+        return 0
+    co = cobertura(ruta)
+    co = 100 if co is None else co
+    cl = e.get("cobertura_limpia")
+    return min(co, cl) if cl is not None else co
 
 
 def _soltar_vl():
@@ -283,7 +338,9 @@ def elegir_mejor(g, emit=None) -> str | None:
             return None
         with Image.open(ruta) as im:
             area = im.size[0] * im.size[1]
-        puntos.append((1 if t else 0, -area, ruta))
+        # una foto con una marca de agua leve gana a una con un panel de titular o a una página de diario
+        pts = 0 if not t else max(1, puntaje(ruta))
+        puntos.append((pts // 10, -area, ruta))
     mejor = min(puntos)[2]
     if nota.get("_IMAGEN_IA") != mejor:
         nota["_IMAGEN_IA"] = mejor
@@ -397,15 +454,41 @@ def paso_limpieza(cfg, emit, cancelar=None, forzar=False) -> dict:
                 t0 = time.time()
                 previa = _destino(ruta)            # ya limpiada antes (p. ej. se perdió el índice)
                 limpia = str(previa) if previa.exists() and not forzar else limpiar(ruta, cancelar)
-                _anotar(ruta, estado="limpia", limpia=limpia, gid=gid, segundos=round(time.time() - t0))
+                co = estado(ruta).get("cobertura")
+                _anotar(ruta, estado="limpia", limpia=limpia, gid=gid, segundos=round(time.time() - t0),
+                        **({"cobertura": co} if co is not None else {}))
                 r["limpias"] += 1
             except Exception as e:  # noqa: BLE001
                 log.exception("Limpieza de foto %s", ruta)
                 _anotar(ruta, estado="error", error=str(e)[:300])
                 r["errores"] += 1
+        verificar_limpias([ruta for _, ruta in sucias], emit, cancelar)
         return r
     finally:
         _lock.release()
+
+
+def verificar_limpias(rutas, emit=lambda *a: None, cancelar=None) -> int:
+    """Mide cuánto rótulo quedó en cada foto limpiada. Si la limpieza no sirvió (el panel sigue), ruta_para
+    vuelve a la original y la IA elige otra foto de la nota si hay una mejor. Devuelve cuántas fallaron."""
+    fallas = 0
+    for i, ruta in enumerate(rutas, 1):
+        if cancelar and cancelar():
+            break
+        e = estado(ruta)
+        if e.get("estado") != "limpia" or not e.get("limpia") or e.get("cobertura_limpia") is not None:
+            continue
+        emit("status", f"Comprobando que las fotos quedaron sin rótulos ({i}/{len(rutas)})…")
+        cobertura(ruta)
+        cl = _cobertura_vl(e["limpia"])
+        if cl is None:
+            continue
+        _sumar(ruta, cobertura_limpia=cl)
+        if cl >= COBERTURA_OK:
+            fallas += 1
+            log.info("La limpieza no quitó los rótulos de %s (queda %s %%)", ruta, cl)
+    _soltar_vl()
+    return fallas
 
 
 def en_segundo_plano(cfg, emit, cancelar=None, al_terminar=None) -> bool:

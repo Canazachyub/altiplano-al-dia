@@ -20,8 +20,8 @@ from .config import get_api_key, nombre_medio
 fase2_lock = threading.Lock()
 LOTE = 12  # noticias nuevas por llamada de clasificación
 MAX_GRUPOS_RECIENTES = 150  # tope de grupos contra los que se compara (resumen de 1 frase c/u)
-MAX_FUENTES_COMBINADA = 8  # publicaciones que se envían para una nota combinada
-PRESUPUESTO_FUENTES = 28000  # caracteres totales de texto de fuentes por nota combinada
+MAX_FUENTES_COMBINADA = 14  # publicaciones que se envían para una nota combinada (con 37 medios, más)
+PRESUPUESTO_FUENTES = 42000  # caracteres totales de texto de fuentes por nota combinada
 
 # errores que no se arreglan reintentando con el siguiente lote o grupo
 _FATAL = re.compile(r"API key|saldo|no existe|cancelado|permiso")
@@ -193,7 +193,10 @@ SYS_COMBINAR = ESTILO + """
 
 Recibes varias publicaciones de distintas fuentes sobre el MISMO hecho. Escribe UNA sola nota
 propia, más completa que cada fuente por separado, juntando quién, qué, cuándo, dónde, cifras
-y declaraciones de todas ellas. Cada fuente trae su fecha de publicación: úsala para fechar
+y declaraciones de todas ellas. CONTRASTA las fuentes una por una antes de escribir: toma de
+cada una lo que aporta y las otras no (un nombre, una edad, una cifra, una hora, el lugar
+exacto, una cita textual, un antecedente). Ninguna fuente con datos propios puede quedar sin
+usar; en FUENTES va CADA medio recibido con lo que aportó. Cada fuente trae su fecha de publicación: úsala para fechar
 el hecho (ver FECHAS Y LUGARES) y, si las fuentes son de días distintos, cuenta primero lo
 más reciente.
 
@@ -332,7 +335,8 @@ def _generar_nota_grupo(g, cfg, emit, cancelar) -> bool:
             previa = json.loads(g["nota_json"])
         except (TypeError, ValueError):
             previa = {}
-        for k in ("_IMAGEN", "_SIN_FOTO"):
+        for k in ("_IMAGEN", "_SIN_FOTO", "_IMAGEN_IA", "IMPACTO", "_impacto_motivo", "SECCION",
+                  "_SECCION_MANUAL"):
             if isinstance(previa, dict) and previa.get(k):
                 nota[k] = previa[k]
     nota["LINKS"] = [{"medio": nombre_medio(p["pagina"], cfg), "fecha": p["publicado"] or p["detectado"],

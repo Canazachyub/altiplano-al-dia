@@ -1251,7 +1251,7 @@ class App(tk.Tk):
     # ================================================================== dashboard: datos
     # ---------------------------------------------------------------- día de trabajo
     def _barra_dia(self, tab):
-        self.dia_sel = datetime.now().strftime("%Y-%m-%d")    # None = todos los días
+        self.dia_sel = storage.dia_editorial()    # None = todos los días
         self._dias_map = {}
         bar = tk.Frame(tab, bg=NAVY)
         bar.pack(fill="x", pady=(0, 10))
@@ -1263,7 +1263,7 @@ class App(tk.Tk):
         self.lbl_dia = tk.Label(izq, text="", bg=NAVY, fg="white", font=(F, 15, "bold"), width=32)
         self.lbl_dia.pack(side="left", padx=4)
         tk.Button(izq, text="▶", command=lambda: self._mover_dia(1), **estilo).pack(side="left")
-        tk.Button(izq, text="Hoy", command=lambda: self.ir_a_dia(datetime.now().strftime("%Y-%m-%d")),
+        tk.Button(izq, text="Hoy", command=lambda: self.ir_a_dia(storage.dia_editorial()),
                   **{**estilo, "font": (F, 10, "bold"), "bg": "#FFEE00", "fg": NAVY, "activebackground": "#F5E200",
                      "activeforeground": NAVY}).pack(side="left", padx=(10, 6), ipady=1)
         self.d_dia = ttk.Combobox(izq, state="readonly", width=38)
@@ -1288,11 +1288,11 @@ class App(tk.Tk):
         self.ir_a_dia((base + timedelta(days=paso)).strftime("%Y-%m-%d"))
 
     def _pintar_barra_dia(self, grupos_dia):
-        hoy = datetime.now().strftime("%Y-%m-%d")
+        hoy = storage.dia_editorial()
         if self.dia_sel:
             d = datetime.strptime(self.dia_sel, "%Y-%m-%d")
             txt = f"{_DIAS[d.weekday()]} {d.day} de {_MESES[d.month - 1]} de {d.year}"
-            rel = {0: "  ·  HOY", -1: "  ·  ayer"}.get((d.date() - datetime.now().date()).days, "")
+            rel = {0: "  ·  HOY", -1: "  ·  ayer"}.get((d.date() - datetime.strptime(hoy, "%Y-%m-%d").date()).days, "")
             self.lbl_dia.configure(text=txt + rel)
         else:
             self.lbl_dia.configure(text="Todos los días")
@@ -1744,6 +1744,20 @@ class App(tk.Tk):
                                 + (f"\n\n{viejas} noticia(s) de días anteriores no entran: el boletín solo lleva "
                                    "lo del día. Pulsa ▶ Revisar ahora para traer las noticias de hoy." if viejas else ""))
             return
+        hoy = storage.consolidado_del_dia() if not previa else None
+        if hoy:
+            r = messagebox.askyesnocancel(
+                "Publicar",
+                f"Hoy ya se publicó el boletín N° {hoy['n']}. Hay {n} noticia(s) nueva(s) o con novedades.\n\n"
+                f"Sí = ACTUALIZAR el N° {hoy['n']} (recomendado): se unen las repetidas con lo ya publicado, "
+                "entra lo mejor del día por impacto y la web recibe todas las noticias del día.\n"
+                f"No = sacar un boletín nuevo (N° {storage.siguiente_consolidado()}).\n"
+                "Cancelar = no hacer nada.")
+            if r is None:
+                return
+            if r:
+                self._actualizar_boletin()
+                return
         if not previa and not messagebox.askyesno(
                 "Generar periódico",
                 f"Se generará el boletín N° {storage.siguiente_consolidado()} con {n} noticia(s).\n"
@@ -1774,6 +1788,51 @@ class App(tk.Tk):
             finally:
                 self.q.put(("fase2_fin", None))
                 self.q.put(("fase2_manual_fin", None))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _actualizar_boletin(self):
+        """Rehace el boletín de hoy con lo nuevo (mismo N°) y manda todo lo del día a la web."""
+        from .consolidado import actualizar_boletin
+        cfg = self._cfg_actual()
+        self._set_busy(True, "Actualizando el boletín de hoy…")
+        self.last_error = ""
+
+        def emit(ev, d=None):
+            self.q.put((ev, d))
+
+        def fin(res):
+            self._refresh_dashboard()
+            if not res:
+                return
+            try:
+                os.startfile(str(res["path"]))  # noqa: S606
+            except OSError:
+                pass
+            txt = (f"Boletín N° {res['n']} actualizado: {res['notas']} noticias "
+                   f"({res['nuevas']} nuevas o con novedades).")
+            if res["fuera"]:
+                txt += f"\n{res['fuera']} no entraron en el papel (menos impacto): van solo a la web."
+            if messagebox.askyesno("Boletín actualizado", txt + f"\n\nLa web tiene {res['web']} noticias del día "
+                                   "marcadas. ¿Subirla ahora?"):
+                self._subir_web()
+
+        def run():
+            res = None
+            try:
+                with fase2_lock:
+                    res = actualizar_boletin(cfg, emit)
+                if res is None:
+                    self.q.put(("error", "Hoy todavía no se publicó un boletín: usa Publicar."))
+            except PermissionError:
+                self.q.put(("error", "Cierra el PDF del boletín en el visor y vuelve a intentar."))
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger("monitor").exception("Actualizar boletín")
+                self.q.put(("error", f"Actualizar boletín: {e}"))
+            finally:
+                self.q.put(("fase2_fin", None))
+                self.q.put(("fase2_manual_fin", None))
+                self.en_ui(lambda: fin(res))
 
         threading.Thread(target=run, daemon=True).start()
 
