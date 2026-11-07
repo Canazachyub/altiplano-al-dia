@@ -265,7 +265,7 @@ class PortadaTab(ttk.Frame):
 
     def _articulos(self):
         from .consolidado import _articulo
-        return [_articulo(g, self.app._cfg_actual()) for g in storage.grupos_para_pdf()]
+        return [_articulo(g, self.app._cfg_actual()) for g in storage.grupos_para_pdf(con_relleno=True)]
 
     def recargar(self):
         arts = self._articulos()

@@ -612,7 +612,7 @@ class VistaPrevia(tk.Toplevel):
 
     # ------------------------------------------------------------------ qué noticias forman este periódico
     def _grupos(self):
-        return storage.grupos_de_consolidado(self.edicion) if self.edicion else storage.grupos_para_pdf()
+        return storage.grupos_de_consolidado(self.edicion) if self.edicion else storage.grupos_para_pdf(con_relleno=True)
 
     def _fecha_edicion(self):
         if not self.edicion:

@@ -283,7 +283,7 @@ def _articulo(g, cfg) -> dict:
         "img_original": original,
         "parrafos": parrafos, "img": img, "act": g["estado_pdf"] == "actualizacion",
         "palabras": sum(len(x.split()) for x in parrafos), "n_medios": storage.n_medios(g),
-        "nota": nota, "grupo": g,
+        "nota": nota, "grupo": g, "dia": storage.dia_de(g),
     }
 
 
@@ -1320,7 +1320,7 @@ def _render(destino, arts, paginas, numero, ahora, st, cfg):
 def generar_consolidado(cfg: dict, grupos=None, destino=None, registrar=True, numero=None, ahora=None):
     """Genera el boletín con los grupos no publicados (nuevos o actualizados). None si no hay.
     grupos/destino/registrar permiten generar una vista previa sin marcar nada como publicado."""
-    grupos = list(grupos if grupos is not None else storage.grupos_para_pdf())
+    grupos = list(grupos if grupos is not None else storage.grupos_para_pdf(con_relleno=True))
     if not grupos:
         return None
     with _GENERANDO:
@@ -1388,7 +1388,7 @@ def actualizar_boletin(cfg: dict, emit=lambda *a: None, cancelar=None) -> dict |
 
     def edicion():
         gs = {g["id"]: g for g in storage.grupos_de_consolidado(n)}
-        for g in storage.grupos_para_pdf():
+        for g in storage.grupos_para_pdf(con_relleno=True):
             gs.setdefault(g["id"], g)
         return list(gs.values())
 

@@ -316,11 +316,17 @@ def grupos_descartados():
         return c.execute("SELECT id FROM grupos WHERE estado_pdf='descartado'").fetchall()
 
 
-def grupos_para_pdf(dia: str | None = None):
+def grupos_para_pdf(dia: str | None = None, con_relleno: bool = False):
     """Noticias que van al próximo boletín: solo las del día (fecha del hecho = hoy, hora local).
-    dia: 'AAAA-MM-DD' para otro día; '' = sin filtro de fecha."""
+    dia: 'AAAA-MM-DD' para otro día; '' = sin filtro de fecha.
+    con_relleno: suma las notas del día anterior que no entraron en el papel; el maquetador las usa
+    solo para llenar los huecos que queden después de poner todas las de hoy."""
     if dia is None:
         dia = dia_editorial()
+    if con_relleno and dia:
+        hoy = list(grupos_para_pdf(dia))
+        ids = {g["id"] for g in hoy}
+        return hoy + [g for g in relleno_de(dia) if g["id"] not in ids]
     q = ("SELECT * FROM grupos WHERE estado_pdf IN ('nuevo','actualizacion') AND nota_json IS NOT NULL"
          " AND COALESCE(en_periodico, 1)=1")
     args = ()
@@ -333,6 +339,15 @@ def grupos_para_pdf(dia: str | None = None):
         args = (*_args_dia(dia), *fijas)
     with _conn() as c:
         return c.execute(q, args).fetchall()
+
+
+def relleno_de(dia: str):
+    """Notas del día anterior a `dia` que nunca salieron en el papel (solo fueron a la web)."""
+    ayer = (datetime.strptime(dia, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    with _conn() as c:
+        return c.execute("SELECT * FROM grupos WHERE estado_pdf='nuevo' AND nota_json IS NOT NULL "
+                         f"AND ultimo_pdf IS NULL AND COALESCE(en_periodico, 1)=1 AND {_SQL_DIA}",
+                         _args_dia(ayer)).fetchall()
 
 
 def _fijas() -> list:

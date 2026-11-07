@@ -54,7 +54,7 @@ def plan(cfg, ahora=None, grupos=None):
     """{gid: (rol, sección de la página, página)} según la plantilla del día."""
     from . import consolidado as C, maqueta
     ahora = ahora or datetime.now()
-    arts = [C._articulo(g, cfg) for g in (grupos if grupos is not None else storage.grupos_para_pdf())]
+    arts = [C._articulo(g, cfg) for g in (grupos if grupos is not None else storage.grupos_para_pdf(con_relleno=True))]
     paginas, _ = maqueta.armar(arts, maqueta.plantilla_del_dia(ahora), C.leer_fijas())
     return {h.art["gid"]: (h.rol, p["seccion"], p["n"]) for p in paginas for h in p["huecos"] if h.art}
 

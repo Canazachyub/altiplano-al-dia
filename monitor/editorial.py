@@ -378,16 +378,30 @@ def deshacer_fusion(gid) -> bool:
 
 
 # ------------------------------------------------------------------ 3. todo junto
+def _publicadas_referencia():
+    """Lo publicado hoy y ayer: una novedad del mismo hecho se une a esa nota y la completa."""
+    from datetime import date, timedelta
+    hoy = storage.dia_editorial()
+    ayer = (date.fromisoformat(hoy) - timedelta(days=1)).isoformat()
+    vistos, out = set(), []
+    for g in list(storage.publicadas_del_dia(hoy)) + list(storage.publicadas_del_dia(ayer)):
+        if g["id"] not in vistos:
+            vistos.add(g["id"])
+            out.append(g)
+    return out
+
+
 def paso_editorial(cfg, emit=lambda *a: None, cancelar=None, forzar=False) -> dict:
     """Evalúa las noticias pendientes, une las repetidas y guarda el impacto. Solo llama a Claude
     si cambió algo desde la última vez (o con forzar=True)."""
     out = {"unidas": 0, "evaluadas": 0, "omitido": False}
-    pendientes = list(storage.grupos_para_pdf())
+    pendientes = list(storage.grupos_para_pdf(con_relleno=True))
     if not pendientes:
         return out
-    # lo que ya salió hoy entra como referencia: una novedad del mismo hecho actualiza esa nota
+    # lo que ya salió hoy (y lo que salió ayer) entra como referencia: una novedad del mismo hecho
+    # completa esa nota (una sola, con todas las fuentes) en vez de salir dos veces
     ids_pend = {g["id"] for g in pendientes}
-    grupos = pendientes + [g for g in storage.publicadas_del_dia() if g["id"] not in ids_pend]
+    grupos = pendientes + [g for g in _publicadas_referencia() if g["id"] not in ids_pend]
     estado = _leer_estado()
     firma = _firma(grupos)
     if not forzar and estado.get("firma") == firma:
@@ -434,9 +448,9 @@ def paso_editorial(cfg, emit=lambda *a: None, cancelar=None, forzar=False) -> di
         except Exception as e:  # noqa: BLE001
             log.exception("unir %s", ids)
             emit("error", f"No se pudieron unir las notas {ids}: {e}")
-    ids_pend = {g["id"] for g in storage.grupos_para_pdf()}
-    _guardar_estado({"firma": _firma(list(storage.grupos_para_pdf()) +
-                                     [g for g in storage.publicadas_del_dia() if g["id"] not in ids_pend]),
+    ids_pend = {g["id"] for g in storage.grupos_para_pdf(con_relleno=True)}
+    _guardar_estado({"firma": _firma(list(storage.grupos_para_pdf(con_relleno=True)) +
+                                     [g for g in _publicadas_referencia() if g["id"] not in ids_pend]),
                      "fecha": storage.now_iso(),
                      "fusiones": r["fusiones"]})
     emit("status", f"Revisión editorial: {out['evaluadas']} noticias ordenadas por impacto, "

@@ -353,7 +353,7 @@ def elegir_mejor(g, emit=None) -> str | None:
 
 def _grupos_objetivo():
     from . import storage
-    grupos = {g["id"]: g for g in storage.grupos_para_pdf()}
+    grupos = {g["id"]: g for g in storage.grupos_para_pdf(con_relleno=True)}
     for g in storage.grupos_web():
         if storage.estado_web(g) != "en_linea":
             grupos.setdefault(g["id"], g)

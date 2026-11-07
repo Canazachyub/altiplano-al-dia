@@ -101,6 +101,9 @@ RANGO = {"principal": 0, "secundaria": 1, "abajo": 2, "breve": 3}
 LARGO = {"principal": (1300, 2000), "secundaria": (650, 1000), "abajo": (450, 750), "breve": (180, 380)}
 
 
+RELLENO_MAX = 0.5   # como mucho la mitad de los huecos con notas del día anterior; nunca todo el boletín
+
+
 def plantilla_del_dia(ahora: datetime) -> dict:
     """La plantilla elegida a mano en la vista previa, o una distinta cada día (rotan las tres)."""
     try:
@@ -184,41 +187,54 @@ def armar(arts, plantilla, fijas=None):
     for j, (sec, tipo) in enumerate(PAGINAS_SERVICIO):
         paginas.append({"n": len(plantilla["paginas"]) + 2 + j, "seccion": sec, "tipo": tipo, "huecos": []})
     huecos = [h for p in paginas for h in p["huecos"] if h.rol != "aviso"]
-    libres = sorted(arts, key=lambda a: -_peso(a))
+    # notas del día anterior que no salieron en papel: solo llenan lo que dejan libre las de hoy
+    hoy = max((a.get("dia") or "" for a in arts), default="")
+    relleno = sorted([a for a in arts if (a.get("dia") or hoy) < hoy], key=lambda a: -_peso(a))
+    libres = sorted([a for a in arts if a not in relleno], key=lambda a: -_peso(a))
+    tope = int(len(huecos) * RELLENO_MAX)
 
     def poner(h, a):
         h.art = a
-        libres.remove(a)
+        (libres if a in libres else relleno).remove(a)
 
     # 1) las fijadas a mano a una página ("Mover a la página…")
-    for a in list(libres):
+    for a in list(libres) + list(relleno):
         pag = fijas.get(a["gid"])
         if pag:
             cand = [h for h in huecos if h.pag == pag and h.art is None]
             if cand:
                 poner(min(cand, key=lambda h: RANGO[h.rol]), a)
-    # 2) cada sección con sus notas: primero aperturas (con foto si se puede), al final los breves
-    for sec in NOTICIAS:
-        propias = [a for a in libres if seccion_de(a) == sec]
-        hs = sorted([h for h in huecos if h.seccion == sec and h.art is None], key=lambda h: (RANGO[h.rol], h.pag))
-        for h in hs:
-            if not propias:
+    def repartir(lista, maximo=None):
+        puestas = 0
+        # 2) cada sección con sus notas: primero aperturas (con foto si se puede), al final los breves
+        for sec in NOTICIAS:
+            propias = [a for a in lista if seccion_de(a) == sec]
+            hs = sorted([h for h in huecos if h.seccion == sec and h.art is None],
+                        key=lambda h: (RANGO[h.rol], h.pag))
+            for h in hs:
+                if not propias or (maximo is not None and puestas >= maximo):
+                    break
+                if h.rol == "breve":
+                    a = min(propias, key=lambda x: (x["palabras"], _peso(x)))
+                elif h.rol in ("principal", "secundaria"):
+                    a = next((x for x in propias[:3] if x["img"]), propias[0])
+                else:
+                    a = propias[0]
+                propias.remove(a)
+                poner(h, a)
+                puestas += 1
+        # 3) huecos libres: las notas sin sección propia (nacionales) y lo que sobró de otras secciones
+        for h in sorted([h for h in huecos if h.art is None], key=lambda h: (RANGO[h.rol], h.pag)):
+            if not lista or (maximo is not None and puestas >= maximo):
                 break
-            if h.rol == "breve":
-                a = min(propias, key=lambda x: (x["palabras"], _peso(x)))
-            elif h.rol in ("principal", "secundaria"):
-                a = next((x for x in propias[:3] if x["img"]), propias[0])
-            else:
-                a = propias[0]
-            propias.remove(a)
+            a = next((x for x in lista[:3] if x["img"]), lista[0]) if h.rol in ("principal", "secundaria") \
+                else (min(lista[:6], key=lambda x: x["palabras"]) if h.rol == "breve" else lista[0])
             poner(h, a)
-    # 3) huecos libres: las notas sin sección propia (nacionales) y lo que sobró de otras secciones
-    for h in sorted([h for h in huecos if h.art is None], key=lambda h: (RANGO[h.rol], h.pag)):
-        if not libres:
-            break
-        a = next((x for x in libres[:3] if x["img"]), libres[0]) if h.rol in ("principal", "secundaria") \
-            else (min(libres[:6], key=lambda x: x["palabras"]) if h.rol == "breve" else libres[0])
-        poner(h, a)
+            puestas += 1
+
+    repartir(libres)                                   # las de hoy, todas las que entren
+    ya = sum(1 for h in huecos if h.art is not None and h.art in arts and (h.art.get("dia") or hoy) < hoy)
+    repartir(relleno, max(0, tope - ya))               # lo que quede vacío, con lo de ayer
     return paginas, libres
 
 
