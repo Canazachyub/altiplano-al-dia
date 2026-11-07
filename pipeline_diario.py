@@ -59,16 +59,20 @@ def main():
         storage.init_db()
         log.info("Día editorial: %s", storage.dia_editorial())
 
-        # 1) Facebook
-        try:
-            revisar(cfg, emit)
-        except Exception:  # noqa: BLE001
-            log.exception("Revisión de Facebook")
+        if "--sin-facebook" not in sys.argv:   # --sin-facebook: solo fotos, boletín y web
+            # 1) Facebook
+            try:
+                revisar(cfg, emit)
+            except Exception:  # noqa: BLE001
+                log.exception("Revisión de Facebook")
 
-        # 2) Fase 2 (sin PDF ni limpieza en segundo plano: se hacen abajo, en orden)
-        ciclo_fase2(dict(cfg, pdf_consolidado_auto=False, limpiar_fotos=False), emit)
+            # 2) Fase 2 (sin PDF ni limpieza en segundo plano: se hacen abajo, en orden)
+            ciclo_fase2(dict(cfg, pdf_consolidado_auto=False, limpiar_fotos=False), emit)
 
-        # 3) Fotos
+        # 3) Fotos (si la revisión dejó una limpieza en segundo plano, se espera a que termine)
+        from monitor.fotos_limpias import _lock as fotos_lock
+        with fotos_lock:
+            pass
         try:
             log.info("Fotos: %s", paso_limpieza(cfg, emit))
         except Exception:  # noqa: BLE001
@@ -86,6 +90,7 @@ def main():
                 if c:
                     storage.set_en_web([g["id"] for g in storage.grupos_de_consolidado(c["n"])], True)
             storage.set_en_web([g["id"] for g in storage.todas_del_dia()], True)
+            storage.set_en_web([g["id"] for g in storage.grupos_para_pdf()], True)   # desde las 3 p. m. de ayer
 
         # 5) Web
         log.info(web.publicar(cfg, avisar=lambda t: log.info("web: %s", t)))

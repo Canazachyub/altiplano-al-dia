@@ -213,8 +213,11 @@ def armar(cfg):
     usados, notas, gids = set(), [], []
     hoy = storage.dia_editorial()
     solo_hoy = cfg.get("web_solo_hoy", True)        # como el boletín: en la web solo lo del día
+    c = storage.consolidado_del_dia(hoy)
+    del_boletin = {g["id"] for g in storage.grupos_de_consolidado(c["n"])} if c else set()
     for g in storage.grupos_web():
-        if solo_hoy and storage.dia_de(g) != hoy:
+        # lo del día = lo del boletín de hoy (desde las 3 p. m. de ayer) y lo que salió impreso en él
+        if solo_hoy and storage.dia_boletin(g) != hoy and g["id"] not in del_boletin:
             continue
         n = _nota(g, cfg, usados)
         if n:
