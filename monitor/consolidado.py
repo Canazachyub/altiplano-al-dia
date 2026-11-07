@@ -295,7 +295,9 @@ def _articulo(g, cfg) -> dict:
         "ante": ante.upper().rstrip("."), "titular": _plano(nota.get("TITULAR") or g["titular"] or ""),
         "lugar": _plano(nota.get("LUGAR") or "").rstrip("."),
         # Pie de foto: el titular de la nota. No se cita a otros medios en las fotos.
-        "pie": _plano(nota.get("TITULAR") or g["titular"] or "") if img else "",
+        "pie": (_plano(nota.get("TITULAR") or g["titular"] or "")
+                + (" (Foto referencial)" if nota.get("_FOTO_GOOGLE") else "")) if img else "",
+        "referencial": bool(img and nota.get("_FOTO_GOOGLE")),
         "img_original": original,
         "parrafos": parrafos, "img": img, "act": g["estado_pdf"] == "actualizacion",
         "palabras": sum(len(x.split()) for x in parrafos), "n_medios": storage.n_medios(g),

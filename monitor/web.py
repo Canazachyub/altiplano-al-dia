@@ -163,7 +163,7 @@ def _nota(g, cfg, usados: set) -> dict | None:
         # dónde están las caras: la web recorta las tarjetas sin cortar cabezas (object-position)
         "foco": _foco(art["img"]) if foto else None,
         # En la web no se cita a otros medios: el pie de la foto es el titular de la nota.
-        "pie": titular, "credito": "",
+        "pie": titular + (" (Foto referencial)" if foto and art.get("referencial") else ""), "credito": "",
         "medios": [], "fuentes": 1, "enlaces": [],
         "boletin": edicion, "edicion": edicion,
         "impacto": _impacto(nota), "fijada": storage.web_fijada(g),

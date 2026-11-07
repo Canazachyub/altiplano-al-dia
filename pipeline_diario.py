@@ -2,7 +2,8 @@
 
 1. Revisa Facebook (todas las páginas activas).
 2. Fase 2: agrupa, redacta, une repetidas con lo ya publicado (hoy y ayer), ajusta largos.
-3. Fotos: la IA elige la mejor y quita rótulos / marcas de agua.
+3. Fotos: a las notas sin foto se les busca una en Google Imágenes (--sin-google lo salta);
+   la IA elige la mejor y quita rótulos / marcas de agua.
 4. Boletín del día: si ya salió uno hoy lo actualiza (mismo N°); si no, genera el del día.
    Lo de hoy va primero; los huecos se llenan con notas de ayer que no salieron en papel.
    La ficha de verificación queda en un PDF aparte y NO se publica.
@@ -68,6 +69,14 @@ def main():
 
             # 2) Fase 2 (sin PDF ni limpieza en segundo plano: se hacen abajo, en orden)
             ciclo_fase2(dict(cfg, pdf_consolidado_auto=False, limpiar_fotos=False), emit)
+
+        # 3a) Notas sin foto: se busca una en Google Imágenes (después pasa por Qwen y el OCR)
+        if "--sin-google" not in sys.argv:
+            try:
+                from monitor.buscar_foto import paso_buscar_fotos
+                log.info("Fotos de Google: %s", paso_buscar_fotos(cfg, emit))
+            except Exception:  # noqa: BLE001
+                log.exception("Búsqueda de fotos en Google")
 
         # 3) Fotos (si la revisión dejó una limpieza en segundo plano, se espera a que termine)
         from monitor.fotos_limpias import _lock as fotos_lock
