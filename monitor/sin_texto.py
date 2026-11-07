@@ -30,8 +30,11 @@ MARGEN = 0.02            # margen alrededor de cada texto (fracción del lado)
 AREA_MIN = 0.30          # el recorte debe conservar al menos el 30 % de la imagen
 LADO_MIN = 260           # px: un recorte más chico no sirve como foto de nota
 PROP_MIN, PROP_MAX = 0.75, 1.9   # ancho / alto aceptables para una foto de nota
-VERSION = 5
-CORTE_ARRIBA_MAX = 0.35   # un recorte que pierde más de la parte de arriba deja cuerpos sin cabeza
+VERSION = 8
+CORTE_ARRIBA_MAX = 0.35
+GRAFICA_CAJAS = 40     # con tantos textos distintos la imagen es una página de diario o un afiche
+GRAFICA_AREA = 0.30    # o si las letras ocupan el 30 % de la imagen
+   # un recorte que pierde más de la parte de arriba deja cuerpos sin cabeza
 
 _ocr = None
 _ocr_lock = threading.Lock()
@@ -186,8 +189,21 @@ def verificada(ruta: str | None) -> str | None:
         _guardar(clave, {"ruta": str(p), "textos": 0})
         return str(p)
     with Image.open(p) as im:
-        im = im.convert("RGB")
         w, h = im.size
+    # página de diario, afiche o gráfica: mucho texto => NO es una foto; no se recorta, se descarta entera
+    unicas = []
+    for c in cajas:
+        if not any(abs(c[0] - u[0]) < 0.02 * w and abs(c[1] - u[1]) < 0.02 * h for u in unicas):
+            unicas.append(c)
+    area = sum((c[2] - c[0]) * (c[3] - c[1]) for c in unicas) / (w * h)
+    if len(unicas) >= GRAFICA_CAJAS or area >= GRAFICA_AREA:
+        _guardar(clave, {"ruta": None, "motivo": f"no es foto: página o gráfica ({len(unicas)} textos, "
+                                                 f"{round(area * 100)} % del área)",
+                         "textos": [c[4] for c in unicas][:12]})
+        log.info("Imagen descartada (página de diario o gráfica): %s", p.name)
+        return None
+    with Image.open(p) as im:
+        im = im.convert("RGB")
         caja = _mejor_recorte(w, h, cajas)
         if not caja:
             _guardar(clave, {"ruta": None, "motivo": "texto en toda la imagen",
@@ -209,3 +225,54 @@ def verificada(ruta: str | None) -> str | None:
     _guardar(clave, {"ruta": str(dst), "recorte": list(caja), "textos": [c[4] for c in cajas][:12]})
     log.info("Foto recortada sin texto: %s -> %s %s", p.name, dst.name, caja)
     return str(dst)
+
+
+PREGUNTA_PAGINA = (
+    "Look at this image. Answer YES if it is any of these: a newspaper or magazine page or front cover "
+    "(even partially), a collage/montage of several separate photos or panels arranged by a designer, "
+    "a poster, flyer or advertisement, a screenshot of a phone/computer screen or video call, or an "
+    "infographic. Answer NO if it is a single ordinary photograph (it may have a caption band or a logo "
+    "on top). Answer only YES or NO.")
+
+
+def _vl_pagina(ruta) -> bool | None:
+    from .fotos_limpias import MODELO_VL, OLLAMA_URL, _jpeg_b64, _post
+    try:
+        r = _post(OLLAMA_URL + "/api/generate", {
+            "model": MODELO_VL, "prompt": PREGUNTA_PAGINA, "images": [_jpeg_b64(ruta)], "stream": False,
+            "options": {"temperature": 0}, "keep_alive": "2m"}, timeout=300)
+    except Exception as e:  # noqa: BLE001
+        log.info("Qwen-VL no disponible para clasificar %s: %s", ruta, e)
+        return None
+    t = (r.get("response") or "").strip().upper()
+    return t.startswith("YES") or t.startswith("SÍ") or t.startswith("SI")
+
+
+def es_pagina(ruta) -> bool:
+    """True si la imagen ORIGINAL es una portada/página de diario, montaje de varias fotos, afiche,
+    captura de pantalla o infografía (lo decide Qwen-VL; sin él, el OCR si hay muchísimo texto).
+    Entonces ninguna versión suya sirve: ni la limpiada por Qwen (queda el montaje) ni un recorte."""
+    if not ruta or not Path(ruta).exists():
+        return False
+    p = Path(ruta)
+    clave = "pagina3|" + _clave(p)
+    previo = _leer().get(clave)
+    if previo is not None:
+        return bool(previo.get("pagina"))
+    # Qwen-VL confunde las tarjetas de medios (foto + franja de titular) con afiches: decide el OCR.
+    # Una portada/página de diario tiene muchísimo más texto (la de Sin Fronteras: 109 lecturas;
+    # una tarjeta con titular: menos de 40).
+    vl = None
+    if vl is None:
+        try:
+            with Image.open(p) as im:
+                w, h = im.size
+            cajas = textos(p)
+            area = sum((c[2] - c[0]) * (c[3] - c[1]) for c in cajas) / (w * h) / 3 if cajas else 0
+            pagina = len(cajas) >= 60 or area >= 0.25
+        except Exception:  # noqa: BLE001
+            return False
+        _guardar(clave, {"pagina": pagina, "por": "ocr", "lecturas": len(cajas)})
+        return pagina
+    _guardar(clave, {"pagina": vl, "por": "qwen-vl"})
+    return vl

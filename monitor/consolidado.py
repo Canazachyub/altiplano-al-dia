@@ -266,11 +266,13 @@ def foto_publicable(nota, posts, original):
     Se prueba la elegida (limpia o, si no, recortada) y después las demás fotos de la nota.
     None = ninguna foto de la nota sirve: la nota sale sin foto antes que con texto encima."""
     from .fotos_limpias import ruta_para
-    from .sin_texto import verificada
+    from .sin_texto import es_pagina, verificada
     otras = [p["imagen"] for p in posts if "imagen" in p.keys() and p["imagen"]]
     for c in dict.fromkeys([original] + otras):
         if not c or not Path(c).exists():
             continue
+        if es_pagina(c):
+            continue            # portada de diario / afiche / gráfica: ni limpia ni recortada
         limpia = c if nota.get("_FOTO_ORIGINAL") and c == original else ruta_para(c)
         v = verificada(limpia) or (verificada(c) if limpia != c else None)
         if v:

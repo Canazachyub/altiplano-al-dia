@@ -65,7 +65,8 @@ def _foto(origen: str, gid: int) -> str | None:
     src = Path(origen)
     if not src.exists():
         return None
-    rel = f"img/noticias/n{gid}.jpg"
+    huella = hashlib.sha1(f"{src.resolve()}|{src.stat().st_mtime_ns}".encode()).hexdigest()[:8]
+    rel = f"img/noticias/n{gid}-{huella}.jpg"
     dst = STAGE / rel
     previa = BASE_DIR / "data" / "web_cache" / f"n{gid}.jpg"   # se conserva entre publicaciones
     marca = previa.with_suffix(".txt")
@@ -116,7 +117,8 @@ def _compartir(origen: str | None, tema: str, titular: str, gid: int) -> str | N
     hecha = tarjeta(Path(origen), (tema or "").split("/")[0], titular, gid)
     if not hecha:
         return None
-    rel = f"img/compartir/n{gid}.jpg"
+    huella = hashlib.sha1(f"{Path(origen).resolve()}|{Path(origen).stat().st_mtime_ns}|{titular}".encode()).hexdigest()[:8]
+    rel = f"img/compartir/n{gid}-{huella}.jpg"
     (STAGE / rel).parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(hecha, STAGE / rel)
     return rel
