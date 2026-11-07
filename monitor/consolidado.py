@@ -488,16 +488,10 @@ def _titular_lineas(texto, ancho, tipo):
 
 @lru_cache(maxsize=256)
 def _recorte(ruta, w, h):
-    """Foto recortada al centro con la proporción del hueco."""
+    """Foto recortada con la proporción del hueco, centrada en las caras (encuadre.foco)."""
+    from . import encuadre
     im = Image.open(ruta).convert("RGB")
-    r = w / h
-    if im.width / im.height > r:
-        nw = int(im.height * r)
-        im = im.crop(((im.width - nw) // 2, 0, (im.width - nw) // 2 + nw, im.height))
-    else:
-        nh = int(im.width / r)
-        top = max(0, int((im.height - nh) * 0.35))          # sesgo hacia arriba (caras)
-        im = im.crop((0, top, im.width, top + nh))
+    im = encuadre.recortar(im, w, h, encuadre.foco(ruta))
     im.thumbnail((int(w * 3), int(h * 3)))
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=82)

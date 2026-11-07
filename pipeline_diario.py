@@ -92,8 +92,21 @@ def main():
             storage.set_en_web([g["id"] for g in storage.todas_del_dia()], True)
             storage.set_en_web([g["id"] for g in storage.grupos_para_pdf()], True)   # desde las 3 p. m. de ayer
 
-        # 5) Web
+        # 5) Web (se arma en la carpeta local; todavía NO se sube)
         log.info(web.publicar(cfg, avisar=lambda t: log.info("web: %s", t)))
+
+        # 6) Control de calidad: si hay errores no se publica nada (regla)
+        from monitor import revision
+        inf = {"boletin": revision.revisar_boletin(cfg), "web": revision.revisar_web(SITIO / "public", cfg)}
+        revision.guardar(inf)
+        for parte, r in inf.items():
+            for e in r["errores"]:
+                log.error("REVISIÓN %s: %s", parte, e)
+            for a in r["avisos"]:
+                log.warning("revisión %s: %s", parte, a)
+        if any(r["errores"] for r in inf.values()):
+            log.error("La revisión encontró errores: NO se sube la web. Ver data/revision/ultima.json")
+            return
         git = ["git", "-C", str(SITIO)]
         subprocess.run(git + ["add", "public"], check=True)
         if subprocess.run(git + ["diff", "--cached", "--quiet"]).returncode:

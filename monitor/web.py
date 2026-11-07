@@ -100,6 +100,14 @@ def _foto(origen: str, gid: int) -> str | None:
     return rel
 
 
+def _foco(ruta):
+    try:
+        from .encuadre import css, foco
+        return css(foco(ruta))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _compartir(origen: str | None, tema: str, titular: str, gid: int) -> str | None:
     """Tarjeta de 1200x630 con la foto, la seccion y el titular para Facebook/WhatsApp (og:image)."""
     if not origen:
@@ -149,7 +157,9 @@ def _nota(g, cfg, usados: set) -> dict | None:
         "cuerpo": [_plano(p) for p in art["parrafos"]], "datos": datos,
         "tema": g["tema"] or "Otros", "seccion": TEMAS.get(g["tema"] or "", "otros"),
         "ambito": g["ambito"] or "REGIONAL", "fecha": g["fecha_hecho"] or g["actualizado"],
-        "imagen": _foto(art["img"], g["id"]) if art["img"] else None,
+        "imagen": (foto := _foto(art["img"], g["id"]) if art["img"] else None),
+        # dónde están las caras: la web recorta las tarjetas sin cortar cabezas (object-position)
+        "foco": _foco(art["img"]) if foto else None,
         # En la web no se cita a otros medios: el pie de la foto es el titular de la nota.
         "pie": titular, "credito": "",
         "medios": [], "fuentes": 1, "enlaces": [],

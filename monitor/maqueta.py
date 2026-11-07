@@ -175,7 +175,55 @@ class Hueco:
         return self.top - self.bot
 
 
+MIN_PAGINAS_NOTICIAS = 6     # el boletín nunca baja de 6 páginas de noticias
+
+
+def _vacios(paginas):
+    return [h for p in paginas for h in p["huecos"] if h.rol != "aviso" and h.art is None]
+
+
+def ajustar(arts, plantilla, fijas=None):
+    """La plantilla del día ajustada a las notas que hay: se quitan las páginas que quedarían casi
+    vacías (sus notas pasan a los huecos libres de las otras), hasta que no sobren huecos o quitar
+    otra página deje notas afuera. Así no salen páginas llenas de avisos de relleno."""
+    paginas_pl = list(plantilla["paginas"])
+    fijas = fijas or {}
+    while len(paginas_pl) > MIN_PAGINAS_NOTICIAS:
+        pl = dict(plantilla, paginas=paginas_pl)
+        pags, sobr = _armar_base(arts, pl, fijas)
+        vac = _vacios(pags)
+        if not vac:
+            break
+        fijadas = set(fijas.values())
+        candidatas = []
+        for i, pg in enumerate(pags[:len(paginas_pl)]):
+            if pg["n"] in fijadas:
+                continue
+            notas = sum(1 for h in pg["huecos"] if h.art is not None)
+            propios_vacios = sum(1 for h in pg["huecos"] if h.rol != "aviso" and h.art is None)
+            if notas <= len(vac) - propios_vacios:          # sus notas caben en los huecos de las demás
+                candidatas.append((notas, -propios_vacios, i))
+        if not candidatas:
+            break
+        mejor = None
+        for _, _, i in sorted(candidatas):
+            prueba = paginas_pl[:i] + paginas_pl[i + 1:]
+            _, sobr2 = _armar_base(arts, dict(plantilla, paginas=prueba), fijas)
+            if len(sobr2) <= len(sobr):
+                mejor = prueba
+                break
+        if mejor is None:
+            break
+        paginas_pl = mejor
+    return dict(plantilla, paginas=paginas_pl)
+
+
 def armar(arts, plantilla, fijas=None):
+    """Reparte las notas en los huecos de la plantilla ajustada a lo que hay (ver ajustar)."""
+    return _armar_base(arts, ajustar(arts, plantilla, fijas), fijas)
+
+
+def _armar_base(arts, plantilla, fijas=None):
     """Reparte las notas en los huecos. Devuelve (paginas, sobrantes):
     paginas = [{"n", "seccion", "esquema", "huecos": [Hueco]}]; sobrantes = notas que no entraron."""
     fijas = fijas or {}
