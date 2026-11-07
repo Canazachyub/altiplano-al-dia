@@ -99,7 +99,7 @@ def ruta_para(ruta: str | None) -> str | None:
     e = estado(ruta)
     if e.get("estado") == "limpia" and e.get("limpia") and Path(e["limpia"]).exists():
         cl, co = e.get("cobertura_limpia"), e.get("cobertura")
-        if cl is not None and co is not None and cl >= co:
+        if cl is not None and co is not None and cl > co:
             return ruta                  # la limpieza no sirvió (el panel de texto sigue ahí)
         return e["limpia"]
     return ruta
