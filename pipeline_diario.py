@@ -125,6 +125,12 @@ def main():
             log.info("Sitio subido a GitHub: se publica en altiplanoaldia.pe en ~1 minuto.")
         else:
             log.info("El sitio no tenía cambios.")
+
+        # 7) Notas del día a Google Sheets (panel /admin y archivo por días). Si falla, la web ya salió.
+        import json as _json
+        from monitor import hoja
+        notas_web = _json.loads((web.STAGE / "data" / "noticias.json").read_text(encoding="utf-8"))
+        log.info(hoja.subir(cfg, notas_web, storage.dia_editorial()))
     except Exception:  # noqa: BLE001
         log.exception("Pipeline diario")
     finally:

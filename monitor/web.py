@@ -9,6 +9,8 @@ Pasos de publicar():
        data/boletines.json  boletines PDF generados (los últimos 30)
        img/noticias/        fotos de las notas, achicadas para la web
        boletines/           PDF de cada boletín y la imagen de su portada
+       data/archivo/AAAA-MM-DD.json  archivo de cada día (no se borra nunca: "Lo último" y notas viejas)
+       data/archivo/indice.json      días archivados, dirección → día, y fotos que deben quedarse
        rss.xml, sitemap.xml, robots.txt (si hay dirección pública configurada)
   2. Los copia a la carpeta del sitio en esta PC (vista local), si está configurada.
   3. Los sube a GitHub en un solo commit (GitHub Pages actualiza el sitio), si hay repositorio y token.
@@ -35,7 +37,9 @@ from .config import BASE_DIR, get_github_token
 STAGE = BASE_DIR / "data" / "web"
 # carpetas que administra el maquetador (lo demás del sitio no se toca)
 GESTIONADAS = ("data/noticias.json", "data/boletines.json", "img/noticias/", "img/compartir/", "boletines/",
-               "rss.xml", "sitemap.xml", "robots.txt")
+               "rss.xml", "sitemap.xml", "robots.txt", "data/archivo/indice.json")
+ARCHIVO = "data/archivo"            # los días archivados NO son gestionados: nunca se borran
+log = logging.getLogger("monitor")
 MAX_BOLETINES = 30
 FOTO_MAX = 1280
 
@@ -212,7 +216,7 @@ def _rfc822(iso):
         return ""
 
 
-def _extras(notas, url):
+def _extras(notas, url, archivo_slugs=()):
     url = url.rstrip("/")
     items = []
     for n in notas[:50]:
@@ -226,11 +230,66 @@ def _extras(notas, url):
         f"<link>{url}/</link><description>Noticias de Puno y la región</description><language>es-PE</language>"
         f"{''.join(items)}</channel></rss>\n", encoding="utf-8")
     rutas = ["", "lo-ultimo", "clima", "ediciones", "denuncia", "boletin", "nosotros"]
-    rutas += [f"seccion/{v}" for v in sorted(set(TEMAS.values()))] + [f"nota/{n['slug']}" for n in notas]
+    slugs = list(dict.fromkeys([n["slug"] for n in notas] + list(archivo_slugs)))
+    rutas += [f"seccion/{v}" for v in sorted(set(TEMAS.values()))] + [f"nota/{x}" for x in slugs]
     urls = "".join(f"<url><loc>{url}/{r}</loc></url>" for r in rutas)
     (STAGE / "sitemap.xml").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns='
                                        f'"http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>\n', encoding="utf-8")
-    (STAGE / "robots.txt").write_text(f"User-agent: *\nAllow: /\nSitemap: {url}/sitemap.xml\n", encoding="utf-8")
+    (STAGE / "robots.txt").write_text(f"User-agent: *\nAllow: /\nDisallow: /admin\nSitemap: {url}/sitemap.xml\n",
+                                      encoding="utf-8")
+
+
+# ------------------------------------------------------------------ archivo por días
+def _archivo_sitio(cfg) -> dict:
+    """{día: [notas]} de lo ya archivado en la carpeta del sitio."""
+    d = Path((cfg.get("web_carpeta") or "").strip() or "-") / ARCHIVO
+    out = {}
+    if d.is_dir():
+        for f in sorted(d.glob("????-??-??.json")):
+            try:
+                out[f.stem] = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                log.warning("No se pudo leer el archivo %s", f)
+    return out
+
+
+def _archivar(cfg, notas, hoy, usados) -> dict:
+    """Escribe el día de hoy en data/archivo/ (y respalda desde la base los días que falten) y el índice.
+    Devuelve {día: [notas]} con todo el archivo."""
+    archivo = _archivo_sitio(cfg)
+    archivo[hoy] = notas
+    faltan = {}
+    for g in storage.grupos_web():                  # días con notas web que todavía no tienen archivo
+        dia = storage.dia_boletin(g)
+        if dia and dia < hoy and dia not in archivo:
+            faltan.setdefault(dia, []).append(g)
+    for dia, gs in sorted(faltan.items()):
+        ns = [n for n in (_nota(g, cfg, usados) for g in gs) if n]
+        if ns:
+            archivo[dia] = sorted(ns, key=lambda n: n.get("fecha") or "", reverse=True)
+            (STAGE / ARCHIVO / f"{dia}.json").write_text(json.dumps(archivo[dia], ensure_ascii=False, indent=1),
+                                                         encoding="utf-8")
+            log.info("Archivo web: respaldado el día %s (%d notas)", dia, len(ns))
+    (STAGE / ARCHIVO / f"{hoy}.json").write_text(json.dumps(notas, ensure_ascii=False, indent=1), encoding="utf-8")
+    slugs, imagenes = {}, set()
+    for dia in sorted(archivo, reverse=True):       # si una nota está en dos días, manda el más reciente
+        for n in archivo[dia]:
+            slugs.setdefault(n["slug"], dia)
+            for k in ("imagen", "imagen_compartir"):
+                if n.get(k):
+                    imagenes.add(n[k])
+    indice = {"dias": [{"dia": d, "n": len(archivo[d])} for d in sorted(archivo, reverse=True)],
+              "slugs": slugs, "imagenes": sorted(imagenes)}
+    (STAGE / ARCHIVO / "indice.json").write_text(json.dumps(indice, ensure_ascii=False), encoding="utf-8")
+    return archivo
+
+
+def _protegidas() -> set:
+    """Fotos que usa alguna nota archivada: no se borran aunque ya no estén en la web de hoy."""
+    try:
+        return set(json.loads((STAGE / ARCHIVO / "indice.json").read_text(encoding="utf-8")).get("imagenes", []))
+    except Exception:  # noqa: BLE001
+        return set()
 
 
 def armar(cfg):
@@ -254,8 +313,10 @@ def armar(cfg):
     bols = _boletines(hoy if solo_hoy else None)
     (STAGE / "data" / "noticias.json").write_text(json.dumps(notas, ensure_ascii=False, indent=1), encoding="utf-8")
     (STAGE / "data" / "boletines.json").write_text(json.dumps(bols, ensure_ascii=False, indent=1), encoding="utf-8")
+    (STAGE / ARCHIVO).mkdir(parents=True, exist_ok=True)
+    archivo = _archivar(cfg, notas, hoy, usados)
     if (cfg.get("web_url") or "").strip():
-        _extras(notas, cfg["web_url"].strip())
+        _extras(notas, cfg["web_url"].strip(), [n["slug"] for d in archivo.values() for n in d])
     return notas, bols, gids
 
 
@@ -282,10 +343,12 @@ def a_carpeta(destino: str) -> int:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst)
         cambios += 1
+    protegidas = _protegidas()
     for g in GESTIONADAS:                     # quita lo que ya no va (solo en lo que administra el maquetador)
         if g.endswith("/") and (base / g).is_dir():
             for p in (base / g).rglob("*"):
-                if p.is_file() and p.relative_to(base).as_posix() not in locales:
+                rel = p.relative_to(base).as_posix()
+                if p.is_file() and rel not in locales and rel not in protegidas:
                     p.unlink()
                     cambios += 1
     return cambios
@@ -332,9 +395,10 @@ def a_github(repo, rama, ruta, token, mensaje, avisar=lambda t: None) -> int:
         blob = _gh("POST", f"/repos/{repo}/git/blobs", token,
                    json={"content": base64.b64encode(p.read_bytes()).decode(), "encoding": "base64"})
         entradas.append({"path": pref + rel, "mode": "100644", "type": "blob", "sha": blob["sha"]})
+    protegidas = _protegidas()
     for path in remoto:
         rel = path[len(pref):] if path.startswith(pref) else None
-        if rel and _gestionada(rel) and rel not in locales:
+        if rel and _gestionada(rel) and rel not in locales and rel not in protegidas:
             entradas.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
     if not entradas:
         return 0
