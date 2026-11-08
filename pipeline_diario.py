@@ -102,7 +102,7 @@ def main():
             storage.set_en_web([g["id"] for g in storage.grupos_para_pdf()], True)   # desde las 3 p. m. de ayer
 
         # 5) Web (se arma en la carpeta local; todavía NO se sube)
-        log.info(web.publicar(cfg, avisar=lambda t: log.info("web: %s", t)))
+        log.info(web.publicar(cfg, avisar=lambda t: log.info("web: %s", t), subir=False))
 
         # 6) Control de calidad: si hay errores no se publica nada (regla)
         from monitor import revision
@@ -116,15 +116,8 @@ def main():
         if any(r["errores"] for r in inf.values()):
             log.error("La revisión encontró errores: NO se sube la web. Ver data/revision/ultima.json")
             return
-        git = ["git", "-C", str(SITIO)]
-        subprocess.run(git + ["add", "public"], check=True)
-        if subprocess.run(git + ["diff", "--cached", "--quiet"]).returncode:
-            subprocess.run(git + ["commit", "-q", "-m",
-                                  f"Web y boletín actualizados {datetime.now():%d/%m/%Y %H:%M} (automático)"], check=True)
-            subprocess.run(git + ["push", "-q"], check=True)
-            log.info("Sitio subido a GitHub: se publica en altiplanoaldia.pe en ~1 minuto.")
-        else:
-            log.info("El sitio no tenía cambios.")
+        log.info("Web: %s", web.subir_sitio(
+            cfg, f"Web y boletín actualizados {datetime.now():%d/%m/%Y %H:%M} (automático)"))
 
         # 7) Notas del día a Google Sheets (panel /admin y archivo por días). Si falla, la web ya salió.
         import json as _json

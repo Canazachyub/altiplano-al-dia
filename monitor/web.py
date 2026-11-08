@@ -409,9 +409,37 @@ def a_github(repo, rama, ruta, token, mensaje, avisar=lambda t: None) -> int:
     return len(entradas)
 
 
+# ------------------------------------------------------------------ 4. git push de la carpeta del sitio
+def _git(carpeta, *args, check=True):
+    import subprocess
+    r = subprocess.run(["git", "-C", carpeta, *args], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", creationflags=0x08000000)   # sin ventana de consola
+    if check and r.returncode:
+        raise ErrorWeb(f"git {args[0]} falló: {(r.stderr or r.stdout).strip()[:300]}")
+    return r
+
+
+def subir_sitio(cfg, mensaje: str | None = None) -> str:
+    """Hace commit y push de public/ en la carpeta del sitio. Sin esto, altiplanoaldia.pe NO cambia."""
+    carpeta = (cfg.get("web_carpeta") or "").strip()      # suele ser <sitio>\public
+    if not carpeta or not any((p / ".git").exists() for p in (Path(carpeta), *Path(carpeta).parents)):
+        return "carpeta sin git: no se subió a altiplanoaldia.pe"
+    _git(carpeta, "add", "--all", ".")
+    if not _git(carpeta, "diff", "--cached", "--quiet", check=False).returncode:
+        _git(carpeta, "pull", "-q", "--rebase", "--autostash", check=False)
+        return "altiplanoaldia.pe ya estaba al día"
+    _git(carpeta, "commit", "-q", "-m", mensaje or f"Web y boletín actualizados {datetime.now():%d/%m/%Y %H:%M}")
+    _git(carpeta, "pull", "-q", "--rebase", "--autostash")
+    _git(carpeta, "push", "-q")
+    log.info("Sitio subido a GitHub: se publica en altiplanoaldia.pe en ~1 minuto.")
+    return "subida a altiplanoaldia.pe (sale en ~1 minuto)"
+
+
 # ------------------------------------------------------------------ todo junto
-def publicar(cfg, avisar=lambda t: None) -> str:
-    """Arma y publica. Devuelve un resumen para mostrar; lanza ErrorWeb con un mensaje claro si falla."""
+def publicar(cfg, avisar=lambda t: None, subir: bool = True) -> str:
+    """Arma y publica. Devuelve un resumen para mostrar; lanza ErrorWeb con un mensaje claro si falla.
+
+    subir=False solo arma la carpeta local (el pipeline revisa primero y sube después con subir_sitio)."""
     if not configurada(cfg):
         raise ErrorWeb("Falta configurar la web: ve a ⚙ Configuración → Web (carpeta del sitio o GitHub).")
     if not _lock.acquire(blocking=False):
@@ -421,11 +449,19 @@ def publicar(cfg, avisar=lambda t: None) -> str:
         notas, bols, gids = armar(cfg)
         partes = []
         carpeta = (cfg.get("web_carpeta") or "").strip()
+        repo, token = (cfg.get("web_repo") or "").strip(), get_github_token()
         if carpeta:
             n = a_carpeta(carpeta)
             partes.append(f"carpeta local ({n} cambio(s))")
-        repo, token = (cfg.get("web_repo") or "").strip(), get_github_token()
-        if repo and token:
+            if subir and not (repo and token):     # con token la sube a_github; si no, git push de la carpeta
+                from . import revision
+                errores = revision.revisar_web(carpeta, cfg)["errores"]
+                if errores:
+                    raise ErrorWeb("La revisión encontró errores, NO se subió a altiplanoaldia.pe:\n- "
+                                   + "\n- ".join(errores[:8]))
+                avisar("Subiendo a altiplanoaldia.pe…")
+                partes.append(subir_sitio(cfg))
+        if subir and repo and token:
             n = a_github(repo, cfg.get("web_rama"), cfg.get("web_ruta"), token,
                          f"Web: {len(notas)} noticias · {datetime.now():%d/%m/%Y %H:%M}", avisar)
             partes.append(f"GitHub ({n} archivo(s))" if n else "GitHub (sin cambios)")
