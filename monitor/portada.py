@@ -279,8 +279,14 @@ ZONAS = None
 AVISOS = []
 
 
+# gids que tienen página en la edición (los pone el render). Una nota de portada que no entró en las páginas
+# interiores no lleva enlace: apuntaría a un destino que no existe y el PDF no se puede guardar.
+COLOCADAS = None
+
+
 def _link(c, a, rect, lugar=None):
-    c.linkRect("", f"g{a['gid']}", rect, relative=0, thickness=0)
+    if COLOCADAS is None or a["gid"] in COLOCADAS:
+        c.linkRect("", f"g{a['gid']}", rect, relative=0, thickness=0)
     if ZONAS is not None:
         ZONAS.append({"pag": 1, "gid": a["gid"], "rect": [round(v, 1) for v in rect], "lugar": lugar})
 

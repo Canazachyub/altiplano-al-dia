@@ -433,7 +433,10 @@ def dia_boletin(g) -> str:
         return f[:10]
     if d.hour >= HORA_ARRASTRE:
         return (d + timedelta(days=1)).strftime("%Y-%m-%d")
-    return dia_editorial(d)
+    # De madrugada (antes de HORA_CIERRE) también es del día del calendario: ya pasó la hora de arrastre de
+    # ayer, así que va al boletín de hoy. Con dia_editorial() caía en el boletín de AYER, que ya había salido,
+    # y la nota no salía en ningún lado.
+    return d.strftime("%Y-%m-%d")
 
 
 def dia_de(g) -> str:

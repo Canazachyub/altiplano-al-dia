@@ -552,7 +552,11 @@ def render(destino, arts, numero, ahora, st, cfg, fijas=None):
          "W": W, "H": H, "M": M, "recorte": C._recorte, "icono": C._icono, "dibujar_logo": C._dibujar_logo,
          "logo_prop": C._logo_prop, "fecha_larga": C._fecha_larga, "plano": C._plano,
          "paginas": paginas, "color_seccion": COLOR_SECCION}
-    portadas.dibujar(c, cfg, arts, paginas_de, numero, ahora, plantilla["portada"], k)
+    portada.COLOCADAS = set(paginas_de)
+    try:
+        portadas.dibujar(c, cfg, arts, paginas_de, numero, ahora, plantilla["portada"], k)
+    finally:
+        portada.COLOCADAS = None
     asignador = avisos.Asignador()
     rnd = random.Random(ahora.toordinal() * 1000 + int(numero or 0))
     for p in paginas:

@@ -257,6 +257,7 @@ def _archivar(cfg, notas, hoy, usados) -> dict:
     """Escribe el día de hoy en data/archivo/ (y respalda desde la base los días que falten) y el índice.
     Devuelve {día: [notas]} con todo el archivo."""
     archivo = _archivo_sitio(cfg)
+    antes = {n["slug"]: n["id"] for d in archivo.values() for n in d}   # direcciones ya publicadas
     archivo[hoy] = notas
     faltan = {}
     for g in storage.grupos_web():                  # días con notas web que todavía no tienen archivo
@@ -279,9 +280,51 @@ def _archivar(cfg, notas, hoy, usados) -> dict:
                 if n.get(k):
                     imagenes.add(n[k])
     indice = {"dias": [{"dia": d, "n": len(archivo[d])} for d in sorted(archivo, reverse=True)],
-              "slugs": slugs, "imagenes": sorted(imagenes)}
+              "slugs": slugs, "imagenes": sorted(imagenes), "redirige": _redirecciones(cfg, archivo, slugs, antes)}
     (STAGE / ARCHIVO / "indice.json").write_text(json.dumps(indice, ensure_ascii=False), encoding="utf-8")
     return archivo
+
+
+def _redirecciones(cfg, archivo, slugs, antes=None) -> dict:
+    """{dirección vieja: dirección nueva} de las notas que el paso editorial unió a otra.
+
+    Una nota unida deja de salir en la web; su enlace (ya compartido en Facebook, indexado en Google) lleva a la
+    nota completa que la absorbió. Se acumula: lo que ya estaba en el índice del sitio no se pierde."""
+    previo = {}
+    try:
+        f = Path((cfg.get("web_carpeta") or "").strip() or "-") / ARCHIVO / "indice.json"
+        previo = json.loads(f.read_text(encoding="utf-8")).get("redirige") or {}
+    except Exception:  # noqa: BLE001
+        pass
+    por_id = {}
+    for dia in sorted(archivo):                       # el más reciente pisa: dirección vigente de cada nota
+        for n in archivo[dia]:
+            por_id[n["id"]] = n["slug"]
+    destino, viejas = {}, {}                          # viejas: {dirección vieja: id de su nota}
+    with storage._conn() as c:
+        filas = c.execute("SELECT id, web_slug, nota_json FROM grupos WHERE nota_json LIKE '%_fusionado_en%'").fetchall()
+    for f in filas:
+        try:
+            destino[f["id"]] = int(json.loads(f["nota_json"] or "{}").get("_fusionado_en"))
+        except (TypeError, ValueError):
+            continue
+        if f["web_slug"]:
+            viejas[f["web_slug"]] = f["id"]
+    # direcciones que estaban publicadas y desaparecieron (la nota se unió, o cambió de titular al absorber otra)
+    for vieja, gid in (antes or {}).items():
+        if vieja not in slugs:
+            viejas.setdefault(vieja, gid)
+    out = dict(previo)
+    for vieja, gid in viejas.items():
+        final, vistos = gid, set()
+        while final in destino and final not in vistos:   # A→B→C: va directo a C
+            vistos.add(final)
+            final = destino[final]
+        nueva = por_id.get(final)
+        if nueva and nueva != vieja:
+            out[vieja] = nueva
+    # nada que apunte a una nota que ya no existe, ni que pise una dirección viva
+    return {v: n for v, n in out.items() if n in slugs and v not in slugs}
 
 
 def _protegidas() -> set:
